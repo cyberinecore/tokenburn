@@ -1,0 +1,7 @@
+{
+  "build": {
+    "fleet": "claude,muse,codex",
+    "route": "compete"
+  },
+  "mode": "compete"
+}

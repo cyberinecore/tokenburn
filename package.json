@@ -1,0 +1,49 @@
+{
+  "name": "@cyberine/tokenburn",
+  "version": "0.1.1",
+  "description": "Token usage and cost reports across every coding agent CLI on your machine: Claude Code, Codex, OpenCode, Gemini CLI, Muse Code, Command Code and more.",
+  "type": "module",
+  "bin": {
+    "tokenburn": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "bun src/cli.ts",
+    "build": "bun build src/cli.ts src/workers/parse-worker.ts --target node --outdir dist --root src --minify && chmod +x dist/cli.js",
+    "typecheck": "tsc --noEmit",
+    "parity": "bun scripts/parity.ts",
+    "pricing:update": "LITELLM_REV=main bun scripts/build-pricing-data.ts",
+    "prepublishOnly": "bun run typecheck && bun run build"
+  },
+  "keywords": [
+    "ccusage",
+    "token",
+    "usage",
+    "cost",
+    "claude-code",
+    "codex",
+    "opencode",
+    "gemini",
+    "muse",
+    "commandcode",
+    "cli"
+  ],
+  "author": "Nia D Pham <xinchao@nghia-pham.com>",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/node": "^22",
+    "typescript": "^5.9"
+  }
+}
