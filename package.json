@@ -1,6 +1,6 @@
 {
   "name": "@cyberine/tokenburn",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Token usage and cost reports across every coding agent CLI on your machine: Claude Code, Codex, OpenCode, Gemini CLI, Muse Code, Command Code and more.",
   "type": "module",
   "bin": {
@@ -38,6 +38,14 @@
   ],
   "author": "Nia D Pham <xinchao@nghia-pham.com>",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cyberinecore/tokenburn.git"
+  },
+  "homepage": "https://github.com/cyberinecore/tokenburn#readme",
+  "bugs": {
+    "url": "https://github.com/cyberinecore/tokenburn/issues"
+  },
   "publishConfig": {
     "access": "public"
   },
