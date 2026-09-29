@@ -164,7 +164,7 @@ export const runReport = async (args: ReportArgs): Promise<void> => {
       const key = args.kind === "session" ? "sessions" : args.kind;
       const value: Json = {
         [key]: rows.map((row) =>
-          args.kind !== "session" ? summaryJson(row) : style === "claude" ? sessionSummaryJson(row) : genericSessionJson(row, style === "generic-with-activity"),
+          args.kind !== "session" ? summaryJson(row) : style === "claude" ? sessionSummaryJson(row) : genericSessionJson(row, style !== "generic"),
         ),
         totals: rows.length === 0 && adapter.emptyTotalsNull ? null : totalsJson(rows),
       };

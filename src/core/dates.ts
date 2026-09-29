@@ -84,3 +84,23 @@ export const lastPeriodsSince = (unit: "day" | "week" | "month", count: number, 
   else date.setUTCMonth(date.getUTCMonth() - earlier);
   return date.toISOString().slice(0, 10).replaceAll("-", "");
 };
+
+export const startOfDayMs = (compact: string, timezone: string | undefined): number | undefined => {
+  const match = /^(\d{4})(\d{2})(\d{2})$/.exec(compact);
+  if (!match) return undefined;
+  const target = `${match[1]}-${match[2]}-${match[3]}`;
+  const utc = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  let lo = utc - 30 * 3_600_000;
+  let hi = utc + 30 * 3_600_000;
+  while (hi - lo > 1) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (dateKey(mid, timezone) >= target) hi = mid;
+    else lo = mid;
+  }
+  return hi;
+};
+
+export const nextCompactDate = (compact: string): string => {
+  const date = new Date(Date.UTC(Number(compact.slice(0, 4)), Number(compact.slice(4, 6)) - 1, Number(compact.slice(6, 8)) + 1));
+  return date.toISOString().slice(0, 10).replaceAll("-", "");
+};

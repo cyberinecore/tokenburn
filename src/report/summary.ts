@@ -39,6 +39,7 @@ class UsageAccumulator {
     s.extraTotalTokens += entry.extraTotalTokens;
     s.totalCost += entry.cost;
     if (entry.credits !== undefined) s.credits = (s.credits ?? 0) + entry.credits;
+    if (entry.messageCount !== undefined) s.messageCount = (s.messageCount ?? 0) + entry.messageCount;
     if (entry.reasoningOutputTokens !== undefined) s.reasoningOutputTokens = (s.reasoningOutputTokens ?? 0) + entry.reasoningOutputTokens;
     if (!entry.model) return;
     const model = resolveModelAlias(entry.model);
@@ -112,6 +113,7 @@ const mergeInto = (target: UsageSummary, row: UsageSummary, indexes: Map<string,
   target.extraTotalTokens += row.extraTotalTokens;
   target.totalCost += row.totalCost;
   if (row.credits !== undefined) target.credits = (target.credits ?? 0) + row.credits;
+  if (row.messageCount !== undefined) target.messageCount = (target.messageCount ?? 0) + row.messageCount;
   for (const model of row.modelsUsed) {
     if (!seen.has(model)) {
       seen.add(model);

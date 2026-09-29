@@ -2,7 +2,7 @@
 
 Token usage and cost reports for every coding agent CLI on your machine, in one table.
 
-tokenburn reads the local logs that Claude Code, Codex, OpenCode, Gemini CLI, Qwen, Muse Code and Command Code already write, prices every request, and reports usage by day, week, month, session or 5-hour billing block. For the agents both tools support, its reports and JSON output match [ccusage](https://github.com/ccusage/ccusage) exactly, and it adds agents ccusage does not read.
+tokenburn reads the local logs that Claude Code, Codex, OpenCode, Gemini CLI, Qwen, Muse Code, Command Code, Amp, Droid, Codebuff, Hermes Agent, pi-agent, Goose, Kilo CLI, GitHub Copilot CLI, Antigravity, Kimi, OpenClaw, Grok Build CLI, ZCode, Cline and Continue already write, prices every request, and reports usage by day, week, month, session or 5-hour billing block. For the agents both tools support, its reports and JSON output match [ccusage](https://github.com/ccusage/ccusage) exactly, and it adds agents ccusage does not read.
 
 Nothing leaves your machine except an optional pricing refresh from LiteLLM (skip it with `--offline`).
 
@@ -17,7 +17,7 @@ npm install -g @cyberine/tokenburn
 tokenburn
 ```
 
-Runs on Node.js 20+ or Bun. OpenCode's SQLite store needs Node.js 22.13+ (built-in `node:sqlite`) or Bun; on older Node versions OpenCode is skipped.
+Runs on Node.js 22.13+ or Bun. The SQLite-backed agents (OpenCode, Hermes, Goose, Kilo, Antigravity, OpenClaw, ZCode, Continue) use the built-in `node:sqlite`; on an older Node.js tokenburn prints one warning naming the requirement and skips them.
 
 ## Usage
 
@@ -75,6 +75,21 @@ tokenburn agents               # which agents have data on this machine, and whe
 | Qwen | `qwen` | `~/.qwen/projects/*/chats/*.jsonl` | `QWEN_DATA_DIR` |
 | Muse Code | `muse` | `~/.local/share/muse/sessions/.msp-view-v1/*/journal-*.bin`, timestamps from `sessions/YYYY/MM/DD/<id>/session.jsonl` | `MUSE_DATA_DIR` |
 | Command Code | `commandcode` | `~/.commandcode/projects/*/*.jsonl` (interactive), `~/.local/share/nf-commandcode/jobs/*/stdout.jsonl` (headless `-p` runs) | `COMMANDCODE_HOME`, `COMMANDCODE_JOBS_DIR` |
+| Amp | `amp` | `~/.local/share/amp/threads/**/*.json` | `AMP_DATA_DIR` (comma list) |
+| Droid (Factory) | `droid` | `~/.factory/sessions/**/*.settings.json` | `DROID_SESSIONS_DIR` (comma list) |
+| Codebuff | `codebuff` | `~/.config/manicode{,-dev,-staging}/projects/*/chats/*/chat-messages.json` | `CODEBUFF_DATA_DIR` (comma list) |
+| Hermes Agent | `hermes` | `~/.hermes/state.db` (SQLite `sessions` table) | `HERMES_HOME` (comma list) |
+| pi-agent | `pi` | `~/.pi/agent/sessions/**/*.jsonl` (skips `subagent-artifacts/`) | `PI_AGENT_DIR` (comma list) |
+| Goose | `goose` | `~/.local/share/goose/sessions/sessions.db`, `~/Library/Application Support/goose/sessions/sessions.db`, `~/.local/share/Block/goose/sessions/sessions.db` | `GOOSE_PATH_ROOT` (`<root>/data/sessions/sessions.db`) |
+| Kilo CLI | `kilo` | `~/.local/share/kilo/kilo.db` (SQLite `message` table) | `KILO_DATA_DIR` (comma list) |
+| GitHub Copilot CLI | `copilot` | `~/.copilot/otel/**/*.jsonl`, `~/.copilot/session-state/*/events.jsonl` | `COPILOT_HOME`, `COPILOT_OTEL_FILE_EXPORTER_PATH` |
+| Antigravity | `antigravity` | `~/.gemini/antigravity{,-cli,-ide,-backup}/conversations/*.db`, `~/.config/antigravity/conversations/*.db` | `ANTIGRAVITY_DATA_DIR` (comma list) |
+| Kimi CLI and Kimi Code | `kimi` | `~/.kimi/sessions/**/wire.jsonl`, `~/.kimi-code/sessions/**/wire.jsonl` | `KIMI_DATA_DIR` (comma list) |
+| OpenClaw | `openclaw` | `~/.openclaw/**/*.jsonl` (+ `.jsonl.deleted.*`, `.jsonl.reset.*`), `~/.openclaw/agents/*/agent/openclaw-agent.sqlite`; also `~/.clawdbot`, `~/.moltbot`, `~/.moldbot` | `OPENCLAW_DIR` (comma list) |
+| Grok Build CLI | `grok` | `~/.grok/sessions/**/updates.jsonl` (+ sibling `summary.json`) | `GROK_HOME` |
+| ZCode | `zcode` | `~/.zcode/cli/db/db.sqlite` (SQLite `model_usage` joined to `session`) | `ZCODE_HOME` (comma list) |
+| Cline | `cline` | `~/.cline/data/tasks/*/ui_messages.json`, `~/.cline/data/sessions/*/<id>.messages.json`, VS Code-family `User/globalStorage/saoudrizwan.claude-dev/tasks/*` | `CLINE_SESSION_DATA_DIR` (comma list) |
+| Continue | `continue` | `~/.continue/dev_data/devdata.sqlite` (`tokens_generated`), else `~/.continue/dev_data/0.2.0/tokensGenerated.jsonl` | `CONTINUE_GLOBAL_DIR` |
 
 Adding another agent is one file plus one line in the registry; see [docs/adding-a-provider.md](docs/adding-a-provider.md).
 
@@ -85,6 +100,21 @@ Adding another agent is one file plus one line in the registry; see [docs/adding
 - **OpenCode**: assistant messages from `message` and `session_message`, fork copies skipped; session-level totals fill in sessions without messages in `session` reports.
 - **Muse Code**: every `session/tokenUsage` record in the session journal, one per model call, timestamped from the source record it points at.
 - **Command Code**: interactive transcripts carry per-message usage and billed cost. Headless runs (`command-code -p`) do not write a transcript, so their usage comes from the job logs of the `nf-commandcode` wrapper: one entry per `model_request_end` event, timestamped at the job start. Free models (`:free`, `-free`) cost $0.
+- **Amp**: `usageLedger.events[]` per thread (tokens and credits), cache tokens joined from the assistant message each event points at; threads without a ledger use each assistant message's `usage`.
+- **Droid**: one entry per session from the cumulative `tokenUsage` in each `*.settings.json` (latest snapshot wins per session id); thinking tokens are billed as output; model names are normalized and priced with provider prefixes from `providerLock`.
+- **Codebuff**: assistant messages in each `chat-messages.json`, usage taken from message metadata, the Codebuff usage block or the run-state message history, deduplicated by message id; credits are kept alongside the USD estimate.
+- **Hermes Agent**: one entry per row of the `sessions` table in `state.db`, deduplicated by session id across homes; the recorded `actual_cost_usd` (else `estimated_cost_usd`) wins when positive, otherwise the tokens are priced with reasoning billed as output; `messageCount` is carried into JSON.
+- **pi-agent**: assistant `message` records with `usage`, models shown as `[pi] <model>`; the recorded `usage.cost.total` wins when present. A forked session drops the leading records that replay its parent's active branch up to the fork time, and duplicates across files are counted once.
+- **Goose**: one entry per row of the `sessions` table, preferring the accumulated token columns; tokens in the total beyond input and output count as reasoning billed as output; priced as the model, then `<provider>/<model>`.
+- **Kilo CLI**: assistant rows of the `message` table, deduplicated by message id; the recorded `cost` wins, otherwise priced as `<provider>/<model>` when that id has an exact price, else the model; reasoning tokens are billed as output.
+- **GitHub Copilot CLI**: `session.shutdown` model metrics from session-state, turned from cumulative snapshots into per-resume intervals, plus OpenTelemetry chat spans (inference logs, agent turns and agent summaries only where no finer record covers the same trace or response). Telemetry older than the latest shutdown of the same session and model is dropped; request counts appear as `messageCount`.
+- **Antigravity**: protobuf usage blocks (and retries) in each conversation database's `steps` and `gen_metadata` tables, merged across databases by response, provider-message and message id; model ids and display names map to pricing ids, and Google-hosted requests also try provider-prefixed prices.
+- **Kimi CLI and Kimi Code**: `StatusUpdate` token usage from old-layout wire files (model from `config.json`) and turn-scoped `usage.record` lines from Kimi Code agent wire files; `kimi-for-coding` is priced as Kimi K2.5 or K2.6 depending on the request date.
+- **OpenClaw**: assistant `message` records with `usage` from session transcripts and the per-agent SQLite `transcript_events` table, tracking the active model through `model_change` records; models show as `[openclaw] <model>` and the recorded `usage.cost.total` wins. A SQLite row replaces its migrated JSONL copy.
+- **Grok Build CLI**: `turn_completed` updates, one entry per model in `modelUsage`; input includes cache reads and is split into uncached, cache-read and cache-write parts. The recorded `costUsdTicks` (1e-10 USD) wins; otherwise the model is priced exactly first, then with `xai/` prefixes and without `-build`.
+- **ZCode**: completed rows of `model_usage`, input split into uncached, cache-read and cache-write parts; Z.ai models (by provider, or `glm-` without one) try `zai/` prices first and bill cache writes at the input rate. Models of other providers are priced only through `pricingOverrides`.
+- **Cline**: one entry per `api_req_started` record (tokens and cost Cline recorded, model from `modelInfo` or the task's model switches) for the CLI and the VS Code, Cursor, VSCodium and Windsurf extensions, plus `metrics` on newer CLI session messages; the recorded cost wins when positive.
+- **Continue**: one entry per `tokens_generated` row (prompt and generated tokens, no cache split; timestamps are UTC); sessions are grouped by day because the log keeps no session id. Free-trial and local providers (Ollama, LM Studio, llama.cpp) cost $0; `-latest` model aliases are priced as the base model.
 
 ## Pricing
 
@@ -126,7 +156,7 @@ Output: `Opus 5.5 (high) | Cost: $1.20 session / $45.30 today / $12.10 block (2h
 
 ## ccusage compatibility
 
-For Claude Code, Codex, OpenCode, Gemini CLI and Qwen, `tokenburn <agent> <report> --json` and the unified reports produce the same keys and values as ccusage 20.0.26 on the same data (`bun run parity` checks this against a local `ccusage`). Differences: whole-number costs print as `0` instead of `0.0`, the status line uses text labels instead of emoji, and the unified reports include the extra agents.
+For every agent ccusage 20.0.26 also reads (Claude Code, Codex, OpenCode, Gemini CLI, Qwen, Amp, Droid, Codebuff, Hermes Agent, pi-agent, Goose, Kilo CLI, GitHub Copilot CLI, Antigravity, Kimi, OpenClaw, Grok Build CLI and ZCode), `tokenburn <agent> <report> --json` and the unified reports produce the same keys and values as ccusage 20.0.26 on the same data (`bun run parity` checks every shared agent that has data on the machine against ccusage and prints a skip line for the rest). Differences: whole-number costs print as `0` instead of `0.0`, the status line uses text labels instead of emoji, and the unified reports include the extra agents.
 
 ## Performance
 

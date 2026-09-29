@@ -22,8 +22,12 @@ export type UsageEntry = {
   costUSD?: number;
   recordedZeroCost?: boolean;
   credits?: number;
+  messageCount?: number;
   speed?: "fast";
   pricingCandidates?: string[];
+  exactPricingCandidates?: string[];
+  overridePricingCandidates?: string[];
+  cacheCreationBilledAsInput?: boolean;
   pricingModel?: string;
   extraBilledAsOutput?: boolean;
   isFallbackModel?: boolean;
@@ -68,6 +72,7 @@ export type UsageSummary = {
   extraTotalTokens: number;
   totalCost: number;
   credits?: number;
+  messageCount?: number;
   reasoningOutputTokens?: number;
   modelsUsed: string[];
   modelBreakdowns: ModelBreakdown[];
@@ -93,7 +98,7 @@ export interface Adapter {
   readonly envVars: readonly string[];
   readonly reports: readonly ReportKind[];
   readonly emptyTotalsNull?: boolean;
-  readonly sessionStyle?: "claude" | "generic" | "generic-with-activity";
+  readonly sessionStyle?: "claude" | "generic" | "generic-with-activity" | "entries-with-activity";
   hasData(): boolean;
   load(ctx: LoadContext): Promise<UsageEntry[]>;
   parseFiles?(files: string[], options?: Record<string, unknown>): unknown[][] | Promise<unknown[][]>;

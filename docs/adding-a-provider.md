@@ -61,6 +61,10 @@ Pricing hooks, all optional:
 - `pricingCandidates`: model ids to try in order (for example with provider prefixes). `candidateRule: "first-found"` stops at the first id with a price even if it prices at zero.
 - `pricingModel`: price under a different id than the displayed `model`.
 - `speed: "fast"`: apply the model's fast-tier multiplier.
+- `exactPricingCandidates`: ids tried first, but only when the pricing table has an exact entry for them (no fuzzy matching).
+- `overridePricingCandidates`: ids tried first when the user's config has a `pricingOverrides` entry for them.
+- `cacheCreationBilledAsInput: true`: bill cache-write tokens at the input rate while still showing them as cache creation.
+- `messageCount`: request or message count, summed into `messageCount` in JSON rows.
 
 Skip records whose token counts are all zero, and deduplicate inside the adapter when the tool can log the same request twice (resumed or forked sessions, retries).
 
@@ -71,7 +75,7 @@ If the data is large, implement `parseFiles(files, options)` to return one resul
 ## 5. Optional hooks
 
 - `reportJson(kind, entries, options)`: a custom JSON shape for `tokenburn <id> <report> --json` when an existing tool's schema must be matched (Codex uses this).
-- `sessionStyle`: `"claude"` (activity fields, cost-sorted), `"generic"` (default, id-sorted) or `"generic-with-activity"`.
+- `sessionStyle`: `"claude"` (activity fields, cost-sorted), `"generic"` (default, id-sorted), `"generic-with-activity"` (activity fields, sessions filtered by last activity) or `"entries-with-activity"` (activity fields, entries filtered by date before grouping, as most ccusage adapters do).
 - `emptyTotalsNull`: print `"totals": null` for an empty single-agent report.
 
 ## 6. Verify against real data

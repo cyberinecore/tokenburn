@@ -62,6 +62,7 @@ export const summaryJson = (row: UsageSummary): Json => ({
   month: row.month,
   week: row.week,
   credits: row.credits,
+  messageCount: row.messageCount,
 });
 
 export const genericSessionJson = (row: UsageSummary, withActivity: boolean): Json => ({
@@ -75,6 +76,7 @@ export const genericSessionJson = (row: UsageSummary, withActivity: boolean): Js
   modelsUsed: row.modelsUsed,
   modelBreakdowns: row.modelBreakdowns.map(breakdownJson),
   credits: row.credits,
+  messageCount: row.messageCount,
   lastActivity: withActivity ? (row.lastActivity ?? null) : undefined,
   firstActivity: withActivity ? (row.firstActivity ?? null) : undefined,
   projectPath: withActivity ? (row.projectPath ?? null) : undefined,

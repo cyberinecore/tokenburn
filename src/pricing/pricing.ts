@@ -455,6 +455,14 @@ export class PricingEngine {
     return result;
   }
 
+  hasOverride(model: string): boolean {
+    return this.overrides.has(model);
+  }
+
+  findExact(model: string): Pricing | undefined {
+    return this.primary.findEntry(model, false) ?? this.modelsDev.findEntry(model, false);
+  }
+
   longContextSplitThreshold(model: string): number {
     const base = modelWithoutDateSuffix(model);
     const resolved = PRICING_ALIASES[base] ?? base;

@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { envPaths, home, isDir, walk } from "../core/fs.ts";
 import { parseFilesParallel } from "../core/pool.ts";
-import { openReadonly, type ReadonlyDb } from "../core/sqlite.ts";
+import { openReadonly, probeSqlite, type ReadonlyDb } from "../core/sqlite.ts";
 import { applyTotalTokenFallback, lenientUint } from "../core/tokens.ts";
 import type { Adapter, LoadContext, UsageEntry } from "../core/types.ts";
 
@@ -425,6 +425,7 @@ export const opencode: Adapter = {
       const localSeen = new Set<string>();
       const db = dbPath(dir);
       if (db) {
+        await probeSqlite(db);
         const [perFile] = await parseFilesParallel<DbResult>({ parser: "opencode", files: [db], options: { allowAggregates, window } }, parseOpenCodeDb);
         const loaded = perFile?.[0] ?? { messages: [], aggregates: [] };
         for (const entry of loaded.messages) {

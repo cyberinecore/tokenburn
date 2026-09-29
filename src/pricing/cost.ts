@@ -1,16 +1,23 @@
 import type { CostMode, PricedEntry, UsageEntry } from "../core/types.ts";
 import { costFromPricing, type Pricing, type PricingEngine } from "./pricing.ts";
 
-const candidatesOf = (entry: UsageEntry): string[] =>
+const baseCandidates = (entry: UsageEntry): string[] =>
   entry.pricingCandidates ?? (entry.pricingModel ?? entry.model ? [entry.pricingModel ?? entry.model!] : []);
+
+const candidatesOf = (entry: UsageEntry, engine: PricingEngine): string[] => {
+  if (!entry.exactPricingCandidates && !entry.overridePricingCandidates) return baseCandidates(entry);
+  const overrides = entry.overridePricingCandidates?.filter((c) => engine.hasOverride(c)) ?? [];
+  const exact = entry.exactPricingCandidates?.filter((c) => engine.findExact(c)) ?? [];
+  return [...new Set([...overrides, ...exact, ...baseCandidates(entry)])];
+};
 
 const findPricing = (engine: PricingEngine, entry: UsageEntry, candidate: string): Pricing | undefined =>
   entry.pricingIgnoresTimestamp ? engine.find(candidate) : engine.findAt(candidate, entry.timestamp);
 
 const billedTokens = (entry: UsageEntry) => ({
-  inputTokens: entry.inputTokens,
+  inputTokens: entry.inputTokens + (entry.cacheCreationBilledAsInput ? entry.cacheCreationTokens : 0),
   outputTokens: entry.outputTokens + (entry.extraBilledAsOutput ? (entry.billedExtraOutputTokens ?? entry.extraTotalTokens) : 0),
-  cacheCreationTokens: entry.cacheCreationTokens,
+  cacheCreationTokens: entry.cacheCreationBilledAsInput ? 0 : entry.cacheCreationTokens,
   cacheReadTokens: entry.cacheReadTokens,
   cacheCreation1hTokens: entry.cacheCreation1hTokens,
 });
@@ -31,7 +38,7 @@ const codexCost = (entry: UsageEntry, pricing: Pricing, engine: PricingEngine): 
 export const calculateCost = (entry: UsageEntry, engine: PricingEngine): number | undefined => {
   if (!entry.model && !entry.pricingCandidates) return 0;
   let found = false;
-  for (const candidate of candidatesOf(entry)) {
+  for (const candidate of candidatesOf(entry, engine)) {
     const pricing = findPricing(engine, entry, candidate);
     if (!pricing) continue;
     found = true;
