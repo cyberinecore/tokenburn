@@ -35,7 +35,7 @@ for (const adapter of shared) {
     continue;
   }
   for (const [report, key] of REPORTS) {
-    const args = [adapter.id, report, "--json", "--offline", "--until", until];
+    const args = [adapter.id, report, "--json", "--until", until];
     const ours = JSON.parse(exec("bun", ["src/cli.ts", ...args]));
     const theirs = JSON.parse(exec("bunx", [CCUSAGE, ...args]));
     const id = report === "session" ? "sessionId" : "date";

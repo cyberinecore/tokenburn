@@ -303,11 +303,20 @@ const overrideToPricing = (o: PricingOverride): Pricing | undefined => {
 
 const liveCachePath = () => join(process.env.XDG_CACHE_HOME || join(home(), ".cache"), "tokenburn", "litellm.json");
 
+const readLiveCache = (path: string, maxAgeMs: number): Record<string, CompactLiteLlm> | undefined => {
+  try {
+    if (Date.now() - statSync(path).mtimeMs >= maxAgeMs) return undefined;
+    const cached = JSON.parse(readFileSync(path, "utf8"));
+    return cached && typeof cached === "object" && Object.keys(cached).length > 0 ? cached : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 const loadLiveLiteLlm = async (warn: (m: string) => void): Promise<Record<string, CompactLiteLlm> | undefined> => {
   const path = liveCachePath();
-  try {
-    if (Date.now() - statSync(path).mtimeMs < LIVE_CACHE_TTL_MS) return JSON.parse(readFileSync(path, "utf8"));
-  } catch {}
+  const fresh = readLiveCache(path, LIVE_CACHE_TTL_MS);
+  if (fresh) return fresh;
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 10_000);
@@ -321,7 +330,14 @@ const loadLiveLiteLlm = async (warn: (m: string) => void): Promise<Record<string
     writeFileSync(path, JSON.stringify(compact));
     return compact as Record<string, CompactLiteLlm>;
   } catch (error) {
-    warn(`WARN  Failed to fetch LiteLLM pricing (${(error as Error).message}); using embedded pricing.`);
+    const reason = (error as Error).message;
+    const stale = readLiveCache(path, Number.POSITIVE_INFINITY);
+    if (stale) {
+      const fetchedAt = new Date(statSync(path).mtimeMs).toISOString().slice(0, 16).replace("T", " ");
+      warn(`WARN  Failed to fetch LiteLLM pricing (${reason}); using cached pricing from ${fetchedAt} UTC.`);
+      return stale;
+    }
+    warn(`WARN  Failed to fetch LiteLLM pricing (${reason}); using embedded pricing.`);
     return undefined;
   }
 };
