@@ -90,6 +90,42 @@ const pricingKeyMatches = (candidate: string, model: string, normalizedModel: st
   return containsPricingKey(normalizedModel, normalizedCandidate) || containsPricingKey(normalizedCandidate, normalizedModel);
 };
 
+const SAME_MODEL_TRAILER = /^(-\d{8}|-\d{4}-\d{2}-\d{2})?(-v\d+(:\d+)?)?$/;
+
+const sameModelSuperset = (candidate: string, model: string): boolean => {
+  let index = candidate.indexOf(model);
+  while (index >= 0) {
+    if (isBoundary(candidate[index - 1]) && SAME_MODEL_TRAILER.test(candidate.slice(index + model.length))) return true;
+    index = candidate.indexOf(model, index + 1);
+  }
+  return false;
+};
+
+const fuzzyRank = (candidate: string, model: string, normalizedModel: string): number => {
+  const normalizedCandidate = normalizedPricingKey(candidate);
+  if (containsPricingKey(model, candidate) || containsPricingKey(normalizedModel, normalizedCandidate)) return 2;
+  if (sameModelSuperset(candidate, model) || sameModelSuperset(normalizedCandidate, normalizedModel)) return 2;
+  return pricingKeyMatches(candidate, model, normalizedModel) ? 1 : 0;
+};
+
+const modelIdentity = (model: string): string => normalizedPricingKey(model.toLowerCase());
+
+const priceSignature = (pricing: Pricing): string => `${pricing.input}|${pricing.output}|${pricing.cacheRead}`;
+
+const FREE_TIER_SUFFIX = /[-:]free$/i;
+
+export const isFreeTierModel = (model: string): boolean => FREE_TIER_SUFFIX.test(model.slice(model.lastIndexOf("/") + 1));
+
+const FREE_PRICING: Pricing = {
+  input: 0,
+  output: 0,
+  cacheCreate: 0,
+  cacheRead: 0,
+  cacheReadExplicit: true,
+  cacheCreateExplicit: true,
+  fastMultiplier: 1,
+};
+
 export const modelWithoutDateSuffix = (model: string): string => {
   if (model.length > 11 && /-\d{4}-\d{2}-\d{2}$/.test(model)) return model.slice(0, -11);
   if (model.length > 9 && /-\d{8}$/.test(model)) return model.slice(0, -9);
@@ -203,10 +239,12 @@ class PricingTable {
   entries = new Map<string, Pricing>();
   exactOnly = new ExactOnlyKeys();
   private sortedKeys?: string[];
+  private identities?: Map<string, string>;
 
   set(model: string, pricing: Pricing): void {
     this.entries.set(model, pricing);
     this.sortedKeys = undefined;
+    this.identities = undefined;
   }
 
   keys(): string[] {
@@ -222,12 +260,38 @@ class PricingTable {
     if (!fuzzy || this.exactOnly.hasAnySpelling(model) || fallback?.exactOnly.hasAnySpelling(model)) return undefined;
     const normalizedModel = normalizedPricingKey(model);
     let best: string | undefined;
+    let bestRank = 0;
     for (const candidate of this.keys()) {
       if (this.exactOnly.has(candidate)) continue;
-      if (!pricingKeyMatches(candidate, model, normalizedModel)) continue;
-      if (!best || candidate.length > best.length || (candidate.length === best.length && candidate < best)) best = candidate;
+      const rank = fuzzyRank(candidate, model, normalizedModel);
+      if (rank === 0 || rank < bestRank) continue;
+      const better =
+        !best ||
+        rank > bestRank ||
+        (rank === 2 ? candidate.length > best.length : candidate.length < best.length) ||
+        (candidate.length === best.length && candidate < best);
+      if (!better) continue;
+      best = candidate;
+      bestRank = rank;
     }
     return best ? this.entries.get(best) : undefined;
+  }
+
+  findIdentity(model: string): Pricing | undefined {
+    if (!this.identities) {
+      this.identities = new Map();
+      for (const key of [...this.keys()].sort()) if (!this.identities.has(modelIdentity(key))) this.identities.set(modelIdentity(key), key);
+    }
+    const key = this.identities.get(modelIdentity(model));
+    return key ? this.entries.get(key) : undefined;
+  }
+
+  qualifiedKeys(model: string): string[] {
+    const wanted = modelIdentity(model);
+    return this.keys().filter((key) => {
+      const slash = key.lastIndexOf("/");
+      return slash >= 0 && modelIdentity(key.slice(slash + 1)) === wanted;
+    });
   }
 
   findEntryOrAlias(model: string, fuzzy: boolean, fallback?: PricingTable): Pricing | undefined {
@@ -454,21 +518,57 @@ export class PricingEngine {
     return check(model) || (alias !== undefined && check(alias));
   }
 
-  find(model: string): Pricing | undefined {
-    if (this.cache.has(model)) return this.cache.get(model);
+  find(model: string, allowFuzzy = true): Pricing | undefined {
+    const key = allowFuzzy ? model : `\u0000exact\u0000${model}`;
+    if (this.cache.has(key)) return this.cache.get(key);
     const resolved = resolveModelAlias(model);
+    const names = resolved !== model ? [model, resolved] : [model];
+    const first = (lookup: (name: string) => Pricing | undefined) => {
+      for (const name of names) {
+        const hit = lookup(name);
+        if (hit) return hit;
+      }
+      return undefined;
+    };
     let result =
-      this.primary.findEntryOrAlias(model, false) ??
-      (resolved !== model ? this.primary.findEntryOrAlias(resolved, false) : undefined);
-    if (!result) {
+      first((name) => this.primary.findEntryOrAlias(name, false)) ??
+      first((name) => this.modelsDev.findEntryOrAlias(name, false)) ??
+      first((name) => this.primary.findIdentity(PRICING_ALIASES[name] ?? name)) ??
+      first((name) => this.modelsDev.findIdentity(PRICING_ALIASES[name] ?? name)) ??
+      (isFreeTierModel(model) ? FREE_PRICING : undefined) ??
+      first((name) => this.consensus(PRICING_ALIASES[name] ?? name));
+    if (!result && allowFuzzy) {
       const fuzzy = !(this.requiresExact(model) || (resolved !== model && this.requiresExact(resolved)));
       result =
         this.primary.findEntryOrAlias(model, fuzzy, this.modelsDev) ??
         (resolved !== model ? this.primary.findEntryOrAlias(resolved, fuzzy, this.modelsDev) : undefined) ??
         this.modelsDev.findEntryOrAlias(resolved, fuzzy);
     }
-    this.cache.set(model, result);
+    this.cache.set(key, result);
     return result;
+  }
+
+  private consensus(model: string): Pricing | undefined {
+    const tail = model.slice(model.lastIndexOf("/") + 1);
+    if (!tail) return undefined;
+    const groups = new Map<string, { count: number; key: string; pricing: Pricing }>();
+    for (const table of [this.primary, this.modelsDev]) {
+      for (const key of table.qualifiedKeys(tail)) {
+        const pricing = table.entries.get(key)!;
+        const signature = priceSignature(pricing);
+        const group = groups.get(signature);
+        if (!group) groups.set(signature, { count: 1, key, pricing });
+        else {
+          group.count++;
+          if (key.length < group.key.length) Object.assign(group, { key, pricing });
+        }
+      }
+    }
+    let best: { count: number; key: string; pricing: Pricing } | undefined;
+    for (const group of groups.values()) {
+      if (!best || group.count > best.count || (group.count === best.count && group.key.length < best.key.length)) best = group;
+    }
+    return best?.pricing;
   }
 
   hasOverride(model: string): boolean {
@@ -486,10 +586,10 @@ export class PricingEngine {
     return entry?.longContextThreshold ?? DEFAULT_LONG_CONTEXT_THRESHOLD;
   }
 
-  findAt(model: string, timestamp: number | undefined): Pricing | undefined {
+  findAt(model: string, timestamp: number | undefined, allowFuzzy = true): Pricing | undefined {
     const resolved = resolveModelAlias(model);
     const scheduled = deepseekIdentity(model) ?? deepseekIdentity(resolved);
-    const base = this.find(model);
+    const base = this.find(model, allowFuzzy);
     if (!scheduled || !base || timestamp === undefined) return base;
     const [old, offPeak, peak] = DEEPSEEK_V4[scheduled]!;
     const [input, output, cacheCreate, cacheRead] = timestamp < DEEPSEEK_V4_CUTOFF_MS ? old : deepseekPeak(timestamp) ? peak : offPeak;

@@ -8,6 +8,8 @@ const USAGE_METHOD = Buffer.from('{"method":"session/tokenUsage"');
 const SOURCE_RECORD =
   /\\?"id\\?":\\?"([0-9a-f-]{36})\\?",\\?"stream\\?":\{[^}]*\},\\?"sequence\\?":(\d+),\\?"recorded_at\\?":(\d+)/g;
 
+const MUSE_PROVIDER = "meta";
+
 type Obj = Record<string, any>;
 
 type UsageRecord = {
@@ -169,12 +171,14 @@ export const muse: Adapter = {
           if (seen.has(key)) continue;
           seen.add(key);
           const timestamp = (sourceId && sources.get(sourceId)) || (record.turnId && snapshot.turns.get(record.turnId)) || fallback;
+          const model = (typeof record.modelId === "string" && record.modelId) || indexRow?.model || "unknown";
           entries.push({
             agent: "muse",
             timestamp,
             sessionId,
             projectPath: indexRow?.workspace ?? snapshot.workspace ?? "Muse Code",
-            model: (typeof record.modelId === "string" && record.modelId) || indexRow?.model || "unknown",
+            model,
+            pricingCandidates: model.includes("/") ? [model] : [`${MUSE_PROVIDER}/${model}`, model],
             inputTokens: input,
             outputTokens: output,
             cacheCreationTokens: cacheWrite,

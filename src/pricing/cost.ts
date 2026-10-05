@@ -11,8 +11,8 @@ const candidatesOf = (entry: UsageEntry, engine: PricingEngine): string[] => {
   return [...new Set([...overrides, ...exact, ...baseCandidates(entry)])];
 };
 
-const findPricing = (engine: PricingEngine, entry: UsageEntry, candidate: string): Pricing | undefined =>
-  entry.pricingIgnoresTimestamp ? engine.find(candidate) : engine.findAt(candidate, entry.timestamp);
+const findPricing = (engine: PricingEngine, entry: UsageEntry, candidate: string, allowFuzzy: boolean): Pricing | undefined =>
+  entry.pricingIgnoresTimestamp ? engine.find(candidate, allowFuzzy) : engine.findAt(candidate, entry.timestamp, allowFuzzy);
 
 const billedTokens = (entry: UsageEntry) => ({
   inputTokens: entry.inputTokens + (entry.cacheCreationBilledAsInput ? entry.cacheCreationTokens : 0),
@@ -38,17 +38,23 @@ const codexCost = (entry: UsageEntry, pricing: Pricing, engine: PricingEngine): 
 export const calculateCost = (entry: UsageEntry, engine: PricingEngine): number | undefined => {
   if (!entry.model && !entry.pricingCandidates) return 0;
   let found = false;
-  for (const candidate of candidatesOf(entry, engine)) {
-    const pricing = findPricing(engine, entry, candidate);
-    if (!pricing) continue;
-    found = true;
-    const cost =
-      entry.costStyle === "codex"
-        ? codexCost(entry, pricing, engine)
-        : costFromPricing(billedTokens(entry), pricing) * (entry.speed === "fast" ? pricing.fastMultiplier : 1);
-    if (cost > 0 || entry.candidateRule === "first-found") return cost;
+  const candidates = candidatesOf(entry, engine);
+  const rank = (candidate: string) => (engine.hasOverride(candidate) ? 0 : candidate.includes("/") ? 1 : 2);
+  const exactOrder = [...candidates].sort((a, b) => rank(a) - rank(b));
+  for (const allowFuzzy of [false, true]) {
+    for (const candidate of allowFuzzy ? candidates : exactOrder) {
+      const pricing = findPricing(engine, entry, candidate, allowFuzzy);
+      if (!pricing) continue;
+      found = true;
+      const cost =
+        entry.costStyle === "codex"
+          ? codexCost(entry, pricing, engine)
+          : costFromPricing(billedTokens(entry), pricing) * (entry.speed === "fast" ? pricing.fastMultiplier : 1);
+      if (cost > 0 || entry.candidateRule === "first-found") return cost;
+    }
+    if (found) return 0;
   }
-  return found ? 0 : undefined;
+  return undefined;
 };
 
 const totalTokens = (e: UsageEntry) =>
