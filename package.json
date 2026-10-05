@@ -1,6 +1,6 @@
 {
   "name": "@cyberine/tokenburn",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Token usage and cost reports across every coding agent CLI on your machine: Claude Code, Codex, OpenCode, Gemini CLI, Muse Code, Command Code and more.",
   "type": "module",
   "bin": {
