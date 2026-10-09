@@ -14,6 +14,7 @@ import { grok } from "./grok.ts";
 import { zcode } from "./zcode.ts";
 import { cline } from "./cline.ts";
 import { continueAdapter } from "./continue.ts";
+import { cyberine } from "./cyberine.ts";
 import { claude } from "./claude.ts";
 import { commandcode } from "./commandcode.ts";
 import { codex } from "./codex.ts";
@@ -22,7 +23,7 @@ import { muse } from "./muse.ts";
 import { opencode } from "./opencode.ts";
 import { qwen } from "./qwen.ts";
 
-export const ADAPTERS: Adapter[] = [claude, codex, opencode, gemini, qwen, muse, commandcode, amp, droid, codebuff, hermes, pi, goose, kilo, copilot, antigravity, kimi, openclaw, grok, zcode, cline, continueAdapter];
+export const ADAPTERS: Adapter[] = [claude, codex, opencode, gemini, qwen, muse, commandcode, amp, droid, codebuff, hermes, pi, goose, kilo, copilot, antigravity, kimi, openclaw, grok, zcode, cline, continueAdapter, cyberine];
 
 export const findAdapter = (id: string): Adapter | undefined => ADAPTERS.find((adapter) => adapter.id === id);
 

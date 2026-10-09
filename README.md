@@ -2,7 +2,7 @@
 
 Token usage and cost reports for every coding agent CLI on your machine, in one table.
 
-tokenburn reads the local logs that Claude Code, Codex, OpenCode, Gemini CLI, Qwen, Muse Code, Command Code, Amp, Droid, Codebuff, Hermes Agent, pi-agent, Goose, Kilo CLI, GitHub Copilot CLI, Antigravity, Kimi, OpenClaw, Grok Build CLI, ZCode, Cline and Continue already write, prices every request, and reports usage by day, week, month, session or 5-hour billing block. For the agents both tools support, its reports and JSON output match [ccusage](https://github.com/ccusage/ccusage) exactly, and it adds agents ccusage does not read.
+tokenburn reads the local logs that Claude Code, Codex, OpenCode, Gemini CLI, Qwen, Muse Code, Command Code, Amp, Droid, Codebuff, Hermes Agent, pi-agent, Goose, Kilo CLI, GitHub Copilot CLI, Antigravity, Kimi, OpenClaw, Grok Build CLI, ZCode, Cline, Continue and Cyberine already write, prices every request, and reports usage by day, week, month, session or 5-hour billing block. For the agents both tools support, its reports and JSON output match [ccusage](https://github.com/ccusage/ccusage) exactly, and it adds agents ccusage does not read.
 
 Nothing leaves your machine except an optional pricing refresh from LiteLLM (skip it with `--offline`).
 
@@ -90,6 +90,7 @@ tokenburn agents               # which agents have data on this machine, and whe
 | ZCode | `zcode` | `~/.zcode/cli/db/db.sqlite` (SQLite `model_usage` joined to `session`) | `ZCODE_HOME` (comma list) |
 | Cline | `cline` | `~/.cline/data/tasks/*/ui_messages.json`, `~/.cline/data/sessions/*/<id>.messages.json`, VS Code-family `User/globalStorage/saoudrizwan.claude-dev/tasks/*` | `CLINE_SESSION_DATA_DIR` (comma list) |
 | Continue | `continue` | `~/.continue/dev_data/devdata.sqlite` (`tokens_generated`), else `~/.continue/dev_data/0.2.0/tokensGenerated.jsonl` | `CONTINUE_GLOBAL_DIR` |
+| Cyberine | `cyberine` | `~/.cyberine/runs/*.json` (index) to each run's `run.json`, `~/.cyberine/chat-sessions/*.json` | `CYBERINE_HOME` (comma list) |
 
 Adding another agent is one file plus one line in the registry; see [docs/adding-a-provider.md](docs/adding-a-provider.md).
 
@@ -115,6 +116,7 @@ Adding another agent is one file plus one line in the registry; see [docs/adding
 - **ZCode**: completed rows of `model_usage`, input split into uncached, cache-read and cache-write parts; Z.ai models (by provider, or `glm-` without one) try `zai/` prices first and bill cache writes at the input rate. Models of other providers are priced only through `pricingOverrides`.
 - **Cline**: one entry per `api_req_started` record (tokens and cost Cline recorded, model from `modelInfo` or the task's model switches) for the CLI and the VS Code, Cursor, VSCodium and Windsurf extensions, plus `metrics` on newer CLI session messages; the recorded cost wins when positive.
 - **Continue**: one entry per `tokens_generated` row (prompt and generated tokens, no cache split; timestamps are UTC); sessions are grouped by day because the log keeps no session id. Free-trial and local providers (Ollama, LM Studio, llama.cpp) cost $0; `-latest` model aliases are priced as the base model.
+- **Cyberine**: one entry per fleet worker run that calls a provider API in-process (DeepSeek, Xiaomi MiMo, OpenRouter, Moonshot, and so on), with `cacheHitTokens` as cache read and the rest of `inputTokens` as uncached input; CLI-backed lanes (Claude, Codex, Muse, OpenCode, Command Code) are skipped because their own adapters already count them. Subscription and free lanes cost $0. Chat sessions give one entry per `cacheLedger` call (OpenRouter `billedUsd` wins when present), else one entry per session from `sessionTokens` with `plannerUsd` as the recorded cost. Runs whose `run.json` was deleted are not counted. DeepSeek direct is priced on its live schedule: weekday peak hours (01:00-04:00 and 06:00-10:00 UTC) cost twice the off-peak rate, and `deepseek-v4-flash` bills at the `deepseek-flash` (V4.1 Flash) rate from 2026-09-10.
 
 ## Pricing
 
