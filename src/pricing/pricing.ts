@@ -306,24 +306,42 @@ class PricingTable {
   }
 }
 
-const DEEPSEEK_V4_CUTOFF_MS = 1_786_896_000_000;
+const DEEPSEEK_PEAK_BILLING_MS = 1_786_896_000_000;
+const DEEPSEEK_V41_FLASH_MS = Date.UTC(2026, 8, 10);
 type Rates = [number, number, number, number];
-const DEEPSEEK_V4: Record<string, [Rates, Rates, Rates]> = {
+type DeepseekEra = { from: number; offPeak: Rates; peak?: Rates };
+const V41_FLASH: DeepseekEra = {
+  from: DEEPSEEK_V41_FLASH_MS,
+  offPeak: [0.15e-6, 0.6e-6, 0.15e-6, 0.003e-6],
+  peak: [0.3e-6, 1.2e-6, 0.3e-6, 0.006e-6],
+};
+const DEEPSEEK_SCHEDULE: Record<string, DeepseekEra[]> = {
   "deepseek-v4-flash": [
-    [0.14e-6, 0.28e-6, 0.14e-6, 0.0028e-6],
-    [0.22e-6, 0.66e-6, 0.22e-6, 0.007e-6],
-    [0.44e-6, 1.32e-6, 0.44e-6, 0.014e-6],
+    { from: Number.NEGATIVE_INFINITY, offPeak: [0.14e-6, 0.28e-6, 0.14e-6, 0.0028e-6] },
+    { from: DEEPSEEK_PEAK_BILLING_MS, offPeak: [0.22e-6, 0.66e-6, 0.22e-6, 0.007e-6], peak: [0.44e-6, 1.32e-6, 0.44e-6, 0.014e-6] },
+    V41_FLASH,
   ],
+  "deepseek-v4-flash-vision-exp": [
+    { from: Number.NEGATIVE_INFINITY, offPeak: [0.22e-6, 0.66e-6, 0.22e-6, 0.007e-6], peak: [0.44e-6, 1.32e-6, 0.44e-6, 0.014e-6] },
+    V41_FLASH,
+  ],
+  "deepseek-flash": [{ ...V41_FLASH, from: Number.NEGATIVE_INFINITY }],
   "deepseek-v4-pro": [
-    [0.435e-6, 0.87e-6, 0.435e-6, 0.003625e-6],
-    [0.66e-6, 1.98e-6, 0.66e-6, 0.022e-6],
-    [1.32e-6, 3.96e-6, 1.32e-6, 0.044e-6],
+    { from: Number.NEGATIVE_INFINITY, offPeak: [0.435e-6, 0.87e-6, 0.435e-6, 0.003625e-6] },
+    { from: DEEPSEEK_PEAK_BILLING_MS, offPeak: [0.66e-6, 1.98e-6, 0.66e-6, 0.022e-6], peak: [1.32e-6, 3.96e-6, 1.32e-6, 0.044e-6] },
   ],
 };
 
 const deepseekIdentity = (model: string): string | undefined => {
+  if (model in DEEPSEEK_SCHEDULE) return model;
   const normalized = normalizedPricingKey(model);
-  return normalized in DEEPSEEK_V4 ? normalized : undefined;
+  return Object.keys(DEEPSEEK_SCHEDULE).find((key) => normalizedPricingKey(key) === normalized);
+};
+
+const deepseekRates = (scheduled: string, timestamp: number): Rates => {
+  const eras = DEEPSEEK_SCHEDULE[scheduled]!;
+  const era = eras.findLast((candidate) => timestamp >= candidate.from) ?? eras[0]!;
+  return era.peak && deepseekPeak(timestamp) ? era.peak : era.offPeak;
 };
 
 const deepseekPeak = (timestamp: number): boolean => {
@@ -591,8 +609,7 @@ export class PricingEngine {
     const scheduled = deepseekIdentity(model) ?? deepseekIdentity(resolved);
     const base = this.find(model, allowFuzzy);
     if (!scheduled || !base || timestamp === undefined) return base;
-    const [old, offPeak, peak] = DEEPSEEK_V4[scheduled]!;
-    const [input, output, cacheCreate, cacheRead] = timestamp < DEEPSEEK_V4_CUTOFF_MS ? old : deepseekPeak(timestamp) ? peak : offPeak;
+    const [input, output, cacheCreate, cacheRead] = deepseekRates(scheduled, timestamp);
     let pricing: Pricing = {
       ...base,
       input,
