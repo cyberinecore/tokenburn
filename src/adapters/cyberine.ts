@@ -117,7 +117,7 @@ const runEntries = (run: Obj): UsageEntry[] => {
         prompt: u64(worker.usage.inputTokens),
         completion: u64(worker.usage.outputTokens),
         hit: u64(worker.usage.cacheHitTokens),
-        costUSD: costModel === "subscription" || costModel === "free" ? 0 : undefined,
+        costUSD: costModel === "subscription" || costModel === "free" ? 0 : f64(worker.usage.billedUsd),
       });
       if (entry) out.push(entry);
     }
