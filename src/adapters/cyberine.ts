@@ -42,8 +42,13 @@ const splitProvider = (value: unknown): [string, string] | undefined => {
   return [text.slice(0, colon), text.slice(colon + 1)];
 };
 
-const pricingCandidatesFor = (provider: string, model: string): string[] =>
-  provider === "deepseek" ? [model] : [...new Set([`${provider.toLowerCase()}/${model}`, model])];
+const DIRECT_PROVIDERS = new Set(["deepseek", "xiaomi"]);
+
+const pricingCandidatesFor = (provider: string, model: string): string[] => {
+  if (DIRECT_PROVIDERS.has(provider)) return [model];
+  if (provider === "ollamaCloud") return [...new Set([model.replace(/-cloud$/, ""), model])];
+  return [...new Set([`${provider.toLowerCase()}/${model}`, model])];
+};
 
 const millis = (value: unknown): number | undefined => {
   if (typeof value === "number" && Number.isFinite(value) && value > 0) return Math.trunc(value > 1e12 ? value : value * 1000);
