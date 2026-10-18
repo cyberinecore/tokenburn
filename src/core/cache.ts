@@ -69,12 +69,12 @@ const stripUndefined = (value: unknown): unknown => {
 
 type Row = Record<string, unknown>;
 
-type Packed = { v: unknown[] } | { k: string[]; c: Record<string, unknown>; r: unknown[][] };
+export type Packed = { v: unknown[] } | { k: string[]; c: Record<string, unknown>; r: unknown[][] };
 
 const isRow = (value: unknown): value is Row =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
 
-const pack = (rows: unknown[]): Packed => {
+export const pack = (rows: unknown[]): Packed => {
   if (rows.length < 2 || !rows.every(isRow) || rows.some((row) => Object.keys(row).length > 30)) return { v: rows };
   const keys: string[] = [];
   const position = new Map<string, number>();
@@ -95,7 +95,7 @@ const pack = (rows: unknown[]): Packed => {
   for (const key of keys) {
     const first = (rows[0] as Row)[key];
     if (first === null || typeof first === "object") continue;
-    if ((rows as Row[]).every((row) => key in row && row[key] === first)) constants[key] = first;
+    if ((rows as Row[]).every((row) => key in row && Object.is(row[key], first))) constants[key] = first;
   }
   const varying = keys.filter((key) => !(key in constants));
   const packed = (rows as Row[]).map((row) => {
@@ -113,7 +113,7 @@ const pack = (rows: unknown[]): Packed => {
   return { k: keys, c: constants, r: packed };
 };
 
-const unpack = (packed: Packed): unknown[] => {
+export const unpack = (packed: Packed): unknown[] => {
   if ("v" in packed) return packed.v;
   const varying = packed.k.filter((key) => !(key in packed.c));
   const slot = new Map(varying.map((key, i) => [key, i]));

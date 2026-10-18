@@ -21,7 +21,8 @@
     "typecheck": "tsc --noEmit",
     "parity": "bun scripts/parity.ts",
     "pricing:update": "LITELLM_REV=main bun scripts/build-pricing-data.ts",
-    "prepublishOnly": "bun run typecheck && bun run build"
+    "prepublishOnly": "bun run typecheck && bun run build",
+    "wasm": "RUSTFLAGS=\"-C target-feature=+simd128\" cargo build --manifest-path native/claude-scan/Cargo.toml --release --target wasm32-unknown-unknown && cp native/claude-scan/target/wasm32-unknown-unknown/release/claude_scan.wasm src/wasm/claude-scan.wasm"
   },
   "keywords": [
     "ccusage",

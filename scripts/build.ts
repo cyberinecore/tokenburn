@@ -1,16 +1,16 @@
 import { createHash } from "node:crypto";
-import { chmodSync, readdirSync, readFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 const root = resolve(import.meta.dir, "..");
 const src = join(root, "src");
-const IMPORT = /(?:from|import\(?)\s*["'](\.{1,2}\/[^"']+)["']/g;
+const IMPORT = /(?:from|import\(?)\s*["'](\.{1,2}\/[^"']+)["']|["'](\.{1,2}\/[^"']+\.wasm)["']/g;
 
 const closure = (entry: string, seen = new Set<string>()): Set<string> => {
-  if (seen.has(entry)) return seen;
+  if (seen.has(entry) || !existsSync(entry)) return seen;
   seen.add(entry);
   if (!entry.endsWith(".ts")) return seen;
-  for (const match of readFileSync(entry, "utf8").matchAll(IMPORT)) closure(resolve(dirname(entry), match[1]!), seen);
+  for (const match of readFileSync(entry, "utf8").matchAll(IMPORT)) closure(resolve(dirname(entry), match[1] ?? match[2]!), seen);
   return seen;
 };
 
@@ -33,4 +33,5 @@ if (!result.success) {
   for (const log of result.logs) console.error(log);
   process.exit(1);
 }
+cpSync(join(src, "wasm"), join(root, "dist", "wasm"), { recursive: true });
 chmodSync(join(root, "dist", "cli.js"), 0o755);

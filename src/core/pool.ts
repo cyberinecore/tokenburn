@@ -1,7 +1,7 @@
 import { availableParallelism } from "node:os";
 import { statSync } from "node:fs";
 import { Worker } from "node:worker_threads";
-import { openParseCache } from "./cache.ts";
+import { openParseCache, type Packed, unpack } from "./cache.ts";
 
 export type ParseJob = { parser: string; files: string[]; options?: Record<string, unknown>; bytes?: number[]; cacheKey?: (file: string) => string; force?: boolean };
 
@@ -25,6 +25,32 @@ const sizeOf = (file: string): number => {
   } catch {
     return 0;
   }
+};
+
+const warm = new Map<string, Worker[]>();
+
+const spawn = (parser: string, options?: Record<string, unknown>): Worker => new Worker(workerPath(), { workerData: { parser, options } });
+
+export const prewarmWorkers = (parser: string): void => {
+  if (warm.has(parser) || process.env.TOKENBURN_NO_WORKERS) return;
+  const threads = threadCount();
+  if (threads <= 1) return;
+  warm.set(
+    parser,
+    Array.from({ length: threads }, () => {
+      const worker = spawn(parser);
+      worker.on("error", () => {});
+      worker.unref();
+      return worker;
+    }),
+  );
+};
+
+const takeWorker = (job: ParseJob): Worker => {
+  const ready = job.options === undefined ? warm.get(job.parser)?.pop() : undefined;
+  if (!ready) return spawn(job.parser, job.options);
+  ready.ref();
+  return ready;
 };
 
 type Inline<T> = (files: string[], options?: Record<string, unknown>) => T[][] | Promise<T[][]>;
@@ -101,7 +127,7 @@ async function parseUncached<T>(job: ParseJob, inline: Inline<T>, deliver: Emit<
       { length: Math.min(threads, batches.length) },
       () =>
         new Promise<void>((resolve, reject) => {
-          const worker = new Worker(workerPath(), { workerData: { parser: job.parser, options: job.options } });
+          const worker = takeWorker(job);
           let batch: number[] = [];
           const send = () => {
             if (taken >= batches.length) {
@@ -112,10 +138,10 @@ async function parseUncached<T>(job: ParseJob, inline: Inline<T>, deliver: Emit<
             batch = batches[taken++]!;
             worker.postMessage(batch.map((k) => job.files[k]!));
           };
-          worker.on("message", (perFile: T[][]) => {
+          worker.on("message", (perFile: Packed[]) => {
             const done = batch;
             send();
-            done.forEach((k, j) => deliver(k, perFile[j] ?? []));
+            done.forEach((k, j) => deliver(k, perFile[j] ? (unpack(perFile[j]!) as T[]) : []));
           });
           worker.once("error", reject);
           send();

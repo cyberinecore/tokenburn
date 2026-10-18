@@ -1,7 +1,7 @@
-import { statSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { basename, join, sep } from "node:path";
 import { envPaths, expandHome, home, isDir, readFileIntoScratch, walk } from "../core/fs.ts";
-import { parseFilesParallel } from "../core/pool.ts";
+import { parseFilesParallel, prewarmWorkers } from "../core/pool.ts";
 import type { Adapter, LoadContext, UsageEntry } from "../core/types.ts";
 
 type RawUsage = {
@@ -163,9 +163,90 @@ export const forEachMarkedLine = (path: string, marker: Buffer, visit: (line: st
   }
 };
 
+type Scanner = {
+  memory: WebAssembly.Memory;
+  input(size: number): number;
+  scan(length: number): number;
+  records(): number;
+  arena(): number;
+};
+
+const SCANNER_PATHS = ["../wasm/claude-scan.wasm", "./wasm/claude-scan.wasm"];
+
+let scanner: Scanner | null | undefined;
+
+// DECISION: marker lines go through the Rust claude-scan WASM module first, not straight to JSON.parse, because validating each line and extracting only the fields parseLine reads in WASM is what lets an uncached run beat ccusage; the module hands back to the JS path every line it cannot vouch for, so acceptance and values stay those of JSON.parse.
+const claudeScanner = (): Scanner | null => {
+  if (scanner !== undefined) return scanner;
+  scanner = null;
+  if (process.env.TOKENBURN_NO_WASM) return scanner;
+  for (const relative of SCANNER_PATHS) {
+    try {
+      const module = new WebAssembly.Module(readFileSync(new URL(relative, import.meta.url)));
+      scanner = new WebAssembly.Instance(module, {}).exports as unknown as Scanner;
+      break;
+    } catch {}
+  }
+  return scanner;
+};
+
+const RECORD = 6;
+
+const scanMarkedLines = (path: string, wasm: Scanner, visit: (line: () => string, compact: string | undefined, advisor: boolean) => void): void => {
+  let length = 0;
+  let base = 0;
+  try {
+    const fd = openSync(path, "r");
+    try {
+      const size = fstatSync(fd).size;
+      base = wasm.input(size);
+      const view = new Uint8Array(wasm.memory.buffer, base, size);
+      while (length < size) {
+        const read = readSync(fd, view, length, size - length, length);
+        if (read === 0) break;
+        length += read;
+      }
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return;
+  }
+  const count = wasm.scan(length);
+  const memory = Buffer.from(wasm.memory.buffer);
+  const records = new Uint32Array(wasm.memory.buffer, wasm.records(), count * RECORD);
+  const arena = wasm.arena();
+  for (let i = 0; i < count; i++) {
+    const at = i * RECORD;
+    const start = base + records[at + 1]!;
+    const end = base + records[at + 2]!;
+    const line = () => memory.toString("utf8", start, end);
+    if (records[at] === 1) {
+      const from = arena + records[at + 3]!;
+      visit(line, memory.toString("utf8", from, from + records[at + 4]!), records[at + 5] === 1);
+    } else visit(line, undefined, false);
+  }
+};
+
+const parseCompact = (compact: string, advisor: boolean, line: () => string, sessionId: string, projectPath: string, out: ClaudeEntry[]): void => {
+  const data = JSON.parse(compact) as RawLine;
+  if (data.isApiErrorMessage === true || (advisor && Array.isArray(data.message?.usage?.iterations))) {
+    parseLine(line(), sessionId, projectPath, out);
+    return;
+  }
+  acceptLine(data, undefined, sessionId, projectPath, out);
+};
+
 const parseFile = (path: string, out: ClaudeEntry[]): void => {
   const { sessionId, projectPath } = sessionParts(path);
-  forEachMarkedLine(path, USAGE_MARKER, (line) => parseLine(line, sessionId, projectPath, out));
+  const wasm = claudeScanner();
+  if (!wasm) {
+    forEachMarkedLine(path, USAGE_MARKER, (line) => parseLine(line, sessionId, projectPath, out));
+    return;
+  }
+  scanMarkedLines(path, wasm, (line, compact, advisor) =>
+    compact === undefined ? parseLine(line(), sessionId, projectPath, out) : parseCompact(compact, advisor, line, sessionId, projectPath, out),
+  );
 };
 
 export const parseClaudeFiles = (files: string[]): ClaudeEntry[][] =>
@@ -176,16 +257,20 @@ export const parseClaudeFiles = (files: string[]): ClaudeEntry[][] =>
   });
 
 const parseLine = (line: string, sessionId: string, projectPath: string, out: ClaudeEntry[]): void => {
-    let data: RawLine;
-    try {
-      data = JSON.parse(line) as RawLine;
-    } catch {
-      return;
-    }
+  let data: RawLine;
+  try {
+    data = JSON.parse(line) as RawLine;
+  } catch {
+    return;
+  }
+  acceptLine(data, line, sessionId, projectPath, out);
+};
+
+const acceptLine = (data: RawLine, line: string | undefined, sessionId: string, projectPath: string, out: ClaudeEntry[]): void => {
     if (!data || typeof data !== "object" || typeof data.timestamp !== "string") return;
     const usage = data.message?.usage;
     if (!validUsage(usage)) return;
-    if (mayHoldForbiddenNull(line)) {
+    if (line !== undefined && mayHoldForbiddenNull(line)) {
       const iterationArrays = [usage.iterations, (data as { data?: { message?: { message?: { usage?: RawUsage } } } }).data?.message?.message?.usage?.iterations].filter(Boolean);
       if (hasForbiddenNull(data, iterationArrays)) return;
     }
@@ -217,10 +302,10 @@ const parseLine = (line: string, sessionId: string, projectPath: string, out: Cl
       requestId: data.requestId,
       dataSessionId: data.sessionId,
       isSidechain: data.isSidechain === true,
-      usageLimitResetTime: usageLimitReset(line, data),
+      usageLimitResetTime: line === undefined ? undefined : usageLimitReset(line, data),
     };
     out.push(entry);
-    if (Array.isArray(usage.iterations) && line.includes('"advisor_message"')) {
+    if (Array.isArray(usage.iterations) && line !== undefined && line.includes('"advisor_message"')) {
       usage.iterations.forEach((iteration, index) => {
         if (iteration.type !== "advisor_message" || !iteration.model) return;
         const advisorCache = cacheCounts(iteration as RawUsage);
@@ -260,8 +345,12 @@ const claudeDeduper = () => {
   const route = (kind: string, messageId: string, session: string) => `${kind}\u0000${messageId}\u0000${session}`;
   const pushRoute = (key: string, index: number, session: string) => {
     let list = replayRoutes.get(key);
-    if (!list) replayRoutes.set(key, (list = []));
-    if (!list.some((item) => item.index === index && item.session === session)) list.push({ index, session });
+    if (!list) {
+      replayRoutes.set(key, [{ index, session }]);
+      return;
+    }
+    for (let i = 0; i < list.length; i++) if (list[i]!.index === index && list[i]!.session === session) return;
+    list.push({ index, session });
   };
   const exactKey = (e: ClaudeEntry) =>
     e.requestId !== undefined
@@ -285,7 +374,8 @@ const claudeDeduper = () => {
     if (index === undefined) {
       const routeKey = entry.isSidechain ? route("replay", entry.messageId, session) : route("replay-entry", entry.messageId, session);
       const requestless = entry.requestId === undefined;
-      for (const candidate of replayRoutes.get(routeKey) ?? []) {
+      const candidates = replayRoutes.get(routeKey);
+      if (candidates) for (const candidate of candidates) {
         const existing = kept[candidate.index]!;
         if (candidate.session !== session) continue;
         if (existing.messageId !== entry.messageId) continue;
@@ -306,10 +396,10 @@ const claudeDeduper = () => {
     const existing = kept[index]!;
     const existingSession = sessionOf(existing);
     if (existingSession !== session) {
-      for (const s of [session, existingSession]) {
-        pushRoute(route("replay", entry.messageId, s), index, s);
-        pushRoute(route("replay-entry", entry.messageId, s), index, s);
-      }
+      pushRoute(route("replay", entry.messageId, session), index, session);
+      pushRoute(route("replay-entry", entry.messageId, session), index, session);
+      pushRoute(route("replay", entry.messageId, existingSession), index, existingSession);
+      pushRoute(route("replay-entry", entry.messageId, existingSession), index, existingSession);
     }
     if (shouldReplace(entry, existing)) {
       kept[index] = entry;
@@ -338,6 +428,7 @@ export const claude: Adapter = {
   hasData: () => claudeRoots().length > 0,
   parseFiles: parseClaudeFiles,
   async load(ctx: LoadContext): Promise<UsageEntry[]> {
+    prewarmWorkers("claude");
     const files: string[] = [];
     for (const root of claudeRoots()) for (const file of walk(join(root, "projects"), (n) => n.endsWith(".jsonl"))) files.push(file);
     files.sort();

@@ -332,10 +332,18 @@ const DEEPSEEK_SCHEDULE: Record<string, DeepseekEra[]> = {
   ],
 };
 
+const identities = new Map<string, string | undefined>();
+
 const deepseekIdentity = (model: string): string | undefined => {
-  if (model in DEEPSEEK_SCHEDULE) return model;
-  const normalized = normalizedPricingKey(model);
-  return Object.keys(DEEPSEEK_SCHEDULE).find((key) => normalizedPricingKey(key) === normalized);
+  if (identities.has(model)) return identities.get(model);
+  let identity: string | undefined;
+  if (model in DEEPSEEK_SCHEDULE) identity = model;
+  else {
+    const normalized = normalizedPricingKey(model);
+    identity = Object.keys(DEEPSEEK_SCHEDULE).find((key) => normalizedPricingKey(key) === normalized);
+  }
+  identities.set(model, identity);
+  return identity;
 };
 
 const deepseekRates = (scheduled: string, timestamp: number): Rates => {
