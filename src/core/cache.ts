@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rename, statSync, writeFile } from "node:fs";
 import { join } from "node:path";
 import { home } from "./fs.ts";
 
@@ -209,10 +209,9 @@ export const openParseCache = <T>(parser: string): ParseCache<T> | undefined => 
         }
         const path = shardPath(shard);
         const temp = `${path}.${process.pid}.tmp`;
-        try {
-          writeFileSync(temp, `${lines.join("\n")}\n`);
-          renameSync(temp, path);
-        } catch {}
+        writeFile(temp, `${lines.join("\n")}\n`, (error) => {
+          if (!error) rename(temp, path, () => {});
+        });
       }
     },
   };
