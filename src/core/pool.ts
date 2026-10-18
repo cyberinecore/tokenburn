@@ -113,8 +113,9 @@ async function parseUncached<T>(job: ParseJob, inline: Inline<T>, deliver: Emit<
             worker.postMessage(batch.map((k) => job.files[k]!));
           };
           worker.on("message", (perFile: T[][]) => {
-            batch.forEach((k, j) => deliver(k, perFile[j] ?? []));
+            const done = batch;
             send();
+            done.forEach((k, j) => deliver(k, perFile[j] ?? []));
           });
           worker.once("error", reject);
           send();
