@@ -32,10 +32,31 @@ export const isValidTimezone = (value: string): boolean => {
   }
 };
 
-const formatDateKey = (timestamp: number, timezone: string | undefined): string => {
-  const parts = formatterFor(timezone).formatToParts(timestamp);
+const partsKey = (formatter: Intl.DateTimeFormat, timestamp: number): string => {
+  const parts = formatter.formatToParts(timestamp);
   const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
   return `${get("year")}-${get("month")}-${get("day")}`;
+};
+
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+const plainFormat = new Map<string, boolean>();
+
+// DECISION: date keys come from Intl format() when it prints the same y-MM-dd layout as the formatToParts key, not from formatToParts alone, because format() is several times cheaper; the layout is probed once per zone and any output that is not exactly NNNN-NN-NN still takes the formatToParts path.
+const formatDateKey = (timestamp: number, timezone: string | undefined): string => {
+  const formatter = formatterFor(timezone);
+  const zone = timezone ?? "";
+  let plain = plainFormat.get(zone);
+  if (plain === undefined) {
+    const probe = Date.UTC(2001, 1, 3, 12);
+    plain = formatter.format(probe) === partsKey(formatter, probe);
+    plainFormat.set(zone, plain);
+  }
+  if (plain) {
+    const text = formatter.format(timestamp);
+    if (ISO_DAY.test(text)) return text;
+  }
+  return partsKey(formatter, timestamp);
 };
 
 const MINUTE_MS = 60_000;
