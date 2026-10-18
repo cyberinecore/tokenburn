@@ -1,6 +1,6 @@
 import { closeSync, fstatSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { basename, join, sep } from "node:path";
-import { envPaths, expandHome, home, isDir, readFileIntoScratch, walk } from "../core/fs.ts";
+import { envPaths, expandHome, home, isDir, readFileIntoScratch, walkAsync } from "../core/fs.ts";
 import { parseFilesParallel, prewarmWorkers } from "../core/pool.ts";
 import type { Adapter, LoadContext, UsageEntry } from "../core/types.ts";
 
@@ -430,7 +430,7 @@ export const claude: Adapter = {
   async load(ctx: LoadContext): Promise<UsageEntry[]> {
     prewarmWorkers("claude");
     const files: string[] = [];
-    for (const root of claudeRoots()) for (const file of walk(join(root, "projects"), (n) => n.endsWith(".jsonl"))) files.push(file);
+    for (const root of claudeRoots()) await walkAsync(join(root, "projects"), (n) => n.endsWith(".jsonl"), files);
     files.sort();
     const sinceMs = ctx.since ? sinceToMs(ctx.since) : undefined;
     const keep = new Set(files);

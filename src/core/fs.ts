@@ -1,5 +1,6 @@
 import { closeSync, fstatSync, openSync, readSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
+import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 
 export const home = (): string => process.env.HOME || homedir();
@@ -35,6 +36,24 @@ export function* walk(root: string, accept: (name: string) => boolean): Generato
     else if (entry.isFile() && accept(entry.name)) yield full;
   }
 }
+
+export const walkAsync = async (root: string, accept: (name: string) => boolean, out: string[] = []): Promise<string[]> => {
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  await Promise.all(
+    entries.map((entry) => {
+      const full = join(root, entry.name);
+      if (entry.isDirectory()) return walkAsync(full, accept, out);
+      if (entry.isFile() && accept(entry.name)) out.push(full);
+      return undefined;
+    }),
+  );
+  return out;
+};
 
 export const listDir = (path: string): string[] => {
   try {
