@@ -27,30 +27,74 @@ const sizeOf = (file: string): number => {
   }
 };
 
-const warm = new Map<string, Worker[]>();
+type Reply = [Packed, string | undefined][];
 
-const spawn = (parser: string, options?: Record<string, unknown>): Worker => new Worker(workerPath(), { workerData: { parser, options } });
-
-export const prewarmWorkers = (parser: string): void => {
-  if (warm.has(parser) || process.env.TOKENBURN_NO_WORKERS) return;
-  const threads = threadCount();
-  if (threads <= 1) return;
-  warm.set(
-    parser,
-    Array.from({ length: threads }, () => {
-      const worker = spawn(parser);
-      worker.on("error", () => {});
-      worker.unref();
-      return worker;
-    }),
-  );
+type Task = {
+  job: number;
+  parser: string;
+  options?: Record<string, unknown>;
+  files: string[];
+  cache: boolean;
+  done: (reply: Reply) => void;
+  fail: (error: unknown) => void;
 };
 
-const takeWorker = (job: ParseJob): Worker => {
-  const ready = job.options === undefined ? warm.get(job.parser)?.pop() : undefined;
-  if (!ready) return spawn(job.parser, job.options);
-  ready.ref();
-  return ready;
+const queue: Task[] = [];
+const idle: Worker[] = [];
+const jobsSeen = new WeakMap<Worker, Set<number>>();
+let spawned = 0;
+let jobs = 0;
+
+// DECISION: every parser shares one process-wide worker pool capped at threadCount(), not a pool per adapter call, because concurrent adapters each spawning their own workers oversubscribed the cores and stretched the Claude parse from about 3s to 6s.
+const spawn = (): Worker => {
+  const worker = new Worker(workerPath());
+  worker.on("error", () => {});
+  worker.unref();
+  jobsSeen.set(worker, new Set());
+  spawned++;
+  return worker;
+};
+
+const run = (worker: Worker, task: Task): void => {
+  const seen = jobsSeen.get(worker)!;
+  const withOptions = !seen.has(task.job);
+  seen.add(task.job);
+  worker.ref();
+  const onError = (error: unknown) => {
+    worker.off("message", onMessage);
+    spawned--;
+    void worker.terminate();
+    task.fail(error);
+    pump();
+  };
+  const onMessage = (reply: Reply) => {
+    worker.off("error", onError);
+    worker.unref();
+    idle.push(worker);
+    pump();
+    task.done(reply);
+  };
+  worker.once("message", onMessage);
+  worker.once("error", onError);
+  worker.postMessage({ job: task.job, parser: task.parser, withOptions, options: withOptions ? task.options : undefined, files: task.files, cache: task.cache });
+};
+
+const pump = (): void => {
+  while (queue.length) {
+    let worker = idle.pop();
+    if (!worker) {
+      if (spawned >= threadCount()) return;
+      worker = spawn();
+    }
+    run(worker, queue.shift()!);
+  }
+};
+
+export const prewarmWorkers = (): void => {
+  if (process.env.TOKENBURN_NO_WORKERS) return;
+  const threads = threadCount();
+  if (threads <= 1) return;
+  while (spawned < threads) idle.push(spawn());
 };
 
 type Inline<T> = (files: string[], options?: Record<string, unknown>) => T[][] | Promise<T[][]>;
@@ -125,35 +169,29 @@ async function parseUncached<T>(job: ParseJob, inline: Inline<T>, deliver: Deliv
     }
   });
   if (current.length) batches.push(current);
-  let taken = 0;
+  const id = ++jobs;
   await Promise.all(
-    Array.from(
-      { length: Math.min(threads, batches.length) },
-      () =>
+    batches.map(
+      (batch) =>
         new Promise<void>((resolve, reject) => {
-          const worker = takeWorker(job);
-          let batch: number[] = [];
-          const send = () => {
-            if (taken >= batches.length) {
-              void worker.terminate();
+          queue.push({
+            job: id,
+            parser: job.parser,
+            options: job.options,
+            files: batch.map((k) => job.files[k]!),
+            cache,
+            done: (reply) => {
+              batch.forEach((k, j) => {
+                const item = reply[j];
+                if (!item) deliver(k, []);
+                else if (item[1] !== undefined) deliver(k, unpack(item[0]) as T[], item[1]);
+                else deliver(k, unpack(item[0]) as T[]);
+              });
               resolve();
-              return;
-            }
-            batch = batches[taken++]!;
-            worker.postMessage({ files: batch.map((k) => job.files[k]!), cache });
-          };
-          worker.on("message", (perFile: [Packed, string | undefined][]) => {
-            const done = batch;
-            send();
-            done.forEach((k, j) => {
-              const item = perFile[j];
-              if (!item) deliver(k, []);
-              else if (item[1] !== undefined) deliver(k, unpack(item[0]) as T[], item[1]);
-              else deliver(k, unpack(item[0]) as T[]);
-            });
+            },
+            fail: reject,
           });
-          worker.once("error", reject);
-          send();
+          pump();
         }),
     ),
   );

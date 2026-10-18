@@ -428,7 +428,7 @@ export const claude: Adapter = {
   hasData: () => claudeRoots().length > 0,
   parseFiles: parseClaudeFiles,
   async load(ctx: LoadContext): Promise<UsageEntry[]> {
-    prewarmWorkers("claude");
+    prewarmWorkers();
     const files: string[] = [];
     for (const root of claudeRoots()) await walkAsync(join(root, "projects"), (n) => n.endsWith(".jsonl"), files);
     files.sort();
