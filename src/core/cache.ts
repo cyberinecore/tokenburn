@@ -13,6 +13,7 @@ export type Lookup<T> = { hit?: T[]; stamp?: Stamp };
 export type ParseCache<T> = {
   lookup(file: string, extra: string): Lookup<T>;
   store(file: string, stamp: Stamp | undefined, value: T[]): void;
+  storeRaw(file: string, stamp: Stamp | undefined, raw: string | undefined): void;
   save(): void;
 };
 
@@ -138,6 +139,11 @@ const shardOf = (file: string): number => {
   return (hash >>> 0) % SHARDS;
 };
 
+export const cacheRaw = (value: unknown[]): string | undefined => {
+  const plain = stripUndefined(value) as unknown[];
+  return jsonSafe(plain) ? JSON.stringify(pack(plain)) : undefined;
+};
+
 export const openParseCache = <T>(parser: string): ParseCache<T> | undefined => {
   if (cacheDisabled()) return undefined;
   const code = parserCodeHash(parser);
@@ -176,11 +182,12 @@ export const openParseCache = <T>(parser: string): ParseCache<T> | undefined => 
       }
     },
     store(file, stamp, value) {
-      if (!stamp || file.includes("\t") || file.includes("\n")) return;
-      const plain = stripUndefined(value) as unknown[];
-      if (!jsonSafe(plain)) return;
+      this.storeRaw(file, stamp, stamp ? cacheRaw(value) : undefined);
+    },
+    storeRaw(file, stamp, raw) {
+      if (!stamp || raw === undefined || file.includes("\t") || file.includes("\n")) return;
       const shard = shardOf(file);
-      shards[shard]!.set(file, { stamp, raw: JSON.stringify(pack(plain)) });
+      shards[shard]!.set(file, { stamp, raw });
       dirty.add(shard);
     },
     save() {

@@ -57,6 +57,8 @@ type Inline<T> = (files: string[], options?: Record<string, unknown>) => T[][] |
 
 export type Emit<T> = (index: number, value: T[]) => void;
 
+type Deliver<T> = (index: number, value: T[], raw?: string) => void;
+
 const BATCH_BYTES = 16 * 1024 * 1024;
 const BATCH_FILES = 64;
 
@@ -89,18 +91,20 @@ export async function parseFilesParallel<T>(job: ParseJob, inline: Inline<T>, em
     await parseUncached(
       { ...job, files: missing.map((i) => job.files[i]!), bytes: job.bytes && missing.map((i) => job.bytes![i]!) },
       inline,
-      (k, value) => {
+      (k, value, raw) => {
         const i = missing[k]!;
-        cache?.store(job.files[i]!, stamps[i], value);
+        if (raw !== undefined) cache?.storeRaw(job.files[i]!, stamps[i], raw);
+        else cache?.store(job.files[i]!, stamps[i], value);
         settle(i, value);
       },
+      cache !== undefined,
     );
     cache?.save();
   }
   return result.map((value) => value ?? []);
 }
 
-async function parseUncached<T>(job: ParseJob, inline: Inline<T>, deliver: Emit<T>): Promise<void> {
+async function parseUncached<T>(job: ParseJob, inline: Inline<T>, deliver: Deliver<T>, cache = false): Promise<void> {
   const sizes = job.bytes ?? job.files.map(sizeOf);
   const totalBytes = sizes.reduce((acc, size) => acc + size, 0);
   const threads = threadCount();
@@ -136,12 +140,17 @@ async function parseUncached<T>(job: ParseJob, inline: Inline<T>, deliver: Emit<
               return;
             }
             batch = batches[taken++]!;
-            worker.postMessage(batch.map((k) => job.files[k]!));
+            worker.postMessage({ files: batch.map((k) => job.files[k]!), cache });
           };
-          worker.on("message", (perFile: Packed[]) => {
+          worker.on("message", (perFile: [Packed, string | undefined][]) => {
             const done = batch;
             send();
-            done.forEach((k, j) => deliver(k, perFile[j] ? (unpack(perFile[j]!) as T[]) : []));
+            done.forEach((k, j) => {
+              const item = perFile[j];
+              if (!item) deliver(k, []);
+              else if (item[1] !== undefined) deliver(k, unpack(item[0]) as T[], item[1]);
+              else deliver(k, unpack(item[0]) as T[]);
+            });
           });
           worker.once("error", reject);
           send();
