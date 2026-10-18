@@ -43,7 +43,31 @@ export const jsonLines = (file: string): Obj[] => {
   return out;
 };
 
-export const isObj = (value: unknown): value is Obj => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+export const forEachLineWithAny = (path: string, markers: Buffer[], visit: (line: string) => void): void => {
+  let content: Buffer;
+  try {
+    content = readFileSync(path);
+  } catch {
+    return;
+  }
+  const next = markers.map((marker) => content.indexOf(marker));
+  let from = 0;
+  for (;;) {
+    let at = -1;
+    for (let i = 0; i < markers.length; i++) {
+      if (next[i]! >= 0 && next[i]! < from) next[i] = content.indexOf(markers[i]!, from);
+      if (next[i]! >= 0 && (at < 0 || next[i]! < at)) at = next[i]!;
+    }
+    if (at < 0) return;
+    const lineStart = content.lastIndexOf(10, at) + 1;
+    let lineEnd = content.indexOf(10, at);
+    if (lineEnd < 0) lineEnd = content.length;
+    visit(content.toString("utf8", lineStart, lineEnd));
+    from = lineEnd + 1;
+  }
+};
+
+export const isObj =(value: unknown): value is Obj => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
 export const u64 = (value: unknown): number => (typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : 0);
 

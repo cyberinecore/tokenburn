@@ -1,6 +1,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { envPaths, home, isDir, listDir, walk } from "../core/fs.ts";
+import { parseFilesParallel } from "../core/pool.ts";
 import { openReadonly } from "../core/sqlite.ts";
 import type { Adapter, UsageEntry } from "../core/types.ts";
 
@@ -61,7 +62,7 @@ const sourceTimestamps = (logFile: string | undefined): Map<string, number> => {
   if (!logFile) return map;
   let text: string;
   try {
-    text = readFileSync(logFile, "utf8");
+    text = readFileSync(logFile, "latin1");
   } catch {
     return map;
   }
@@ -131,6 +132,71 @@ const mtime = (file: string): number => {
   }
 };
 
+type SessionJob = { indexRow?: IndexRow; logPath?: string };
+
+type KeyedEntry = { key: string; entry: UsageEntry };
+
+const parseSession = (dir: string, job: SessionJob): KeyedEntry[] => {
+  const sessionDir = basename(dir);
+  const journals = listDir(dir)
+    .filter((name) => name.startsWith("journal-") && name.endsWith(".bin"))
+    .sort();
+  if (journals.length === 0) return [];
+  const records = journals.flatMap((name) => readJournalUsage(join(dir, name)));
+  if (records.length === 0) return [];
+  const { indexRow } = job;
+  const sources = sourceTimestamps(job.logPath);
+  const snapshot = snapshotInfo(dir);
+  const fallback = snapshot.last ?? indexRow?.updatedAt ?? mtime(join(dir, journals[journals.length - 1]!));
+  const out: KeyedEntry[] = [];
+  for (const record of records) {
+    const usage = record.usage ?? {};
+    const cacheRead = uint(usage.cacheReadTokens ?? usage.cachedTokens);
+    const rawInput = uint(usage.inputTokens ?? record.promptTokens);
+    const output = uint(usage.outputTokens ?? Math.max(uint(record.totalTokens) - uint(record.promptTokens), 0));
+    const cacheWrite = uint(usage.cacheWriteTokens);
+    const input = Math.max(rawInput - cacheRead - cacheWrite, 0);
+    if (input === 0 && output === 0 && cacheRead === 0 && cacheWrite === 0) continue;
+    const sourceId = record.sourceRange?.first?.id;
+    const sessionId = record.sessionId ?? sessionDir;
+    const key = `${sessionId}\u0000${sourceId ?? `${record.turnId}:${rawInput}:${output}:${cacheRead}`}`;
+    const timestamp = (sourceId && sources.get(sourceId)) || (record.turnId && snapshot.turns.get(record.turnId)) || fallback;
+    const model = (typeof record.modelId === "string" && record.modelId) || indexRow?.model || "unknown";
+    out.push({
+      key,
+      entry: {
+        agent: "muse",
+        timestamp,
+        sessionId,
+        projectPath: indexRow?.workspace ?? snapshot.workspace ?? "Muse Code",
+        model,
+        pricingCandidates: model.includes("/") ? [model] : [`${MUSE_PROVIDER}/${model}`, model],
+        inputTokens: input,
+        outputTokens: output,
+        cacheCreationTokens: cacheWrite,
+        cacheReadTokens: cacheRead,
+        extraTotalTokens: 0,
+        reasoningOutputTokens: uint(usage.reasoningTokens),
+      },
+    });
+  }
+  return out;
+};
+
+const parseSessionFiles = (files: string[], options?: Record<string, unknown>): KeyedEntry[][] => {
+  const jobs = (options?.jobs ?? {}) as Record<string, SessionJob>;
+  return files.map((dir) => parseSession(dir, jobs[dir] ?? {}));
+};
+
+const size = (file: string | undefined): number => {
+  if (!file) return 0;
+  try {
+    return statSync(file).size;
+  } catch {
+    return 0;
+  }
+};
+
 export const muse: Adapter = {
   id: "muse",
   label: "Muse Code",
@@ -138,6 +204,7 @@ export const muse: Adapter = {
   envVars: ["MUSE_DATA_DIR"],
   reports: ["daily", "weekly", "monthly", "session"],
   hasData: () => museRoots().some((root) => listDir(join(root, "sessions", ".msp-view-v1")).length > 0),
+  parseFiles: parseSessionFiles,
   async load(): Promise<UsageEntry[]> {
     const entries: UsageEntry[] = [];
     const seen = new Set<string>();
@@ -145,48 +212,22 @@ export const muse: Adapter = {
       const viewRoot = join(root, "sessions", ".msp-view-v1");
       const index = await loadIndex(root);
       const logs = sessionLogs(root);
+      const dirs: string[] = [];
+      const jobs: Record<string, SessionJob> = {};
       for (const sessionDir of listDir(viewRoot).sort()) {
         const dir = join(viewRoot, sessionDir);
-        const journals = listDir(dir)
-          .filter((name) => name.startsWith("journal-") && name.endsWith(".bin"))
-          .sort();
-        if (journals.length === 0) continue;
-        const records = journals.flatMap((name) => readJournalUsage(join(dir, name)));
-        if (records.length === 0) continue;
         const indexRow = index.get(sessionDir);
-        const sources = sourceTimestamps(logs.get(sessionDir) ?? indexRow?.logPath);
-        const snapshot = snapshotInfo(dir);
-        const fallback = snapshot.last ?? indexRow?.updatedAt ?? mtime(join(dir, journals[journals.length - 1]!));
-        for (const record of records) {
-          const usage = record.usage ?? {};
-          const cacheRead = uint(usage.cacheReadTokens ?? usage.cachedTokens);
-          const rawInput = uint(usage.inputTokens ?? record.promptTokens);
-          const output = uint(usage.outputTokens ?? Math.max(uint(record.totalTokens) - uint(record.promptTokens), 0));
-          const cacheWrite = uint(usage.cacheWriteTokens);
-          const input = Math.max(rawInput - cacheRead - cacheWrite, 0);
-          if (input === 0 && output === 0 && cacheRead === 0 && cacheWrite === 0) continue;
-          const sourceId = record.sourceRange?.first?.id;
-          const sessionId = record.sessionId ?? sessionDir;
-          const key = `${sessionId}\u0000${sourceId ?? `${record.turnId}:${rawInput}:${output}:${cacheRead}`}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          const timestamp = (sourceId && sources.get(sourceId)) || (record.turnId && snapshot.turns.get(record.turnId)) || fallback;
-          const model = (typeof record.modelId === "string" && record.modelId) || indexRow?.model || "unknown";
-          entries.push({
-            agent: "muse",
-            timestamp,
-            sessionId,
-            projectPath: indexRow?.workspace ?? snapshot.workspace ?? "Muse Code",
-            model,
-            pricingCandidates: model.includes("/") ? [model] : [`${MUSE_PROVIDER}/${model}`, model],
-            inputTokens: input,
-            outputTokens: output,
-            cacheCreationTokens: cacheWrite,
-            cacheReadTokens: cacheRead,
-            extraTotalTokens: 0,
-            reasoningOutputTokens: uint(usage.reasoningTokens),
-          });
-        }
+        dirs.push(dir);
+        jobs[dir] = { indexRow, logPath: logs.get(sessionDir) ?? indexRow?.logPath };
+      }
+      const perSession = await parseFilesParallel<KeyedEntry>(
+        { parser: "muse", files: dirs, options: { jobs }, bytes: dirs.map((dir) => size(jobs[dir]!.logPath)) },
+        parseSessionFiles,
+      );
+      for (const { key, entry } of perSession.flat()) {
+        if (seen.has(key)) continue;
+        seen.add(key);
+        entries.push(entry);
       }
     }
     return entries.sort((a, b) => a.timestamp - b.timestamp);

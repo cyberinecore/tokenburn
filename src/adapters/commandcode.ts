@@ -1,7 +1,9 @@
 import { readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { envPaths, home, isDir, listDir, walk } from "../core/fs.ts";
+import { parseFilesParallel } from "../core/pool.ts";
 import { lenientUint } from "../core/tokens.ts";
+import { forEachLineWithAny } from "./common.ts";
 import type { Adapter, UsageEntry } from "../core/types.ts";
 
 type Obj = Record<string, any>;
@@ -55,12 +57,13 @@ const buildEntry = (
   };
 };
 
-const readLines = (file: string): string[] => {
-  try {
-    return readFileSync(file, "utf8").split("\n");
-  } catch {
-    return [];
-  }
+const TRANSCRIPT_MARKERS = [Buffer.from('"usage"'), Buffer.from('"session"')];
+const JOB_MARKERS = [Buffer.from('"model_request_end"'), Buffer.from('"type":"result"')];
+
+const markedLines = (file: string, markers: Buffer[]): string[] => {
+  const lines: string[] = [];
+  forEachLineWithAny(file, markers, (line) => lines.push(line));
+  return lines;
 };
 
 const parseTranscript = (file: string): UsageEntry[] => {
@@ -68,7 +71,7 @@ const parseTranscript = (file: string): UsageEntry[] => {
   let projectPath = basename(dirname(file));
   const out: UsageEntry[] = [];
   const seen = new Set<string>();
-  for (const line of readLines(file)) {
+  for (const line of markedLines(file, TRANSCRIPT_MARKERS)) {
     if (!line.includes('"usage"') && !line.includes('"session"')) continue;
     let value: Obj;
     try {
@@ -104,12 +107,14 @@ const readJson = (file: string): Obj | undefined => {
   }
 };
 
-const parseJob = (dir: string): { sessionId?: string; entries: UsageEntry[] } => {
+type JobResult = { sessionId?: string; entries: UsageEntry[] };
+
+const parseJob = (dir: string): JobResult => {
   const meta = readJson(join(dir, "meta.json")) ?? {};
   const stdout = join(dir, "stdout.jsonl");
   const events: { model: string; usage: Obj }[] = [];
   let result: Obj | undefined;
-  for (const line of readLines(stdout)) {
+  for (const line of markedLines(stdout, JOB_MARKERS)) {
     if (!line.includes('"model_request_end"') && !line.includes('"type":"result"')) continue;
     let value: Obj;
     try {
@@ -139,6 +144,8 @@ const parseJob = (dir: string): { sessionId?: string; entries: UsageEntry[] } =>
   return { sessionId, entries };
 };
 
+const parseJobFiles = (files: string[]): JobResult[][] => files.map((file) => [parseJob(dirname(file))]);
+
 const transcriptFiles = (): string[] => {
   const files: string[] = [];
   for (const root of commandCodeHomes()) {
@@ -161,6 +168,7 @@ export const commandcode: Adapter = {
   reports: ["daily", "weekly", "monthly", "session"],
   sessionStyle: "generic-with-activity",
   hasData: () => transcriptFiles().length > 0 || jobDirs().length > 0,
+  parseFiles: parseJobFiles,
   async load(): Promise<UsageEntry[]> {
     const entries: UsageEntry[] = [];
     const transcriptSessions = new Set<string>();
@@ -169,8 +177,10 @@ export const commandcode: Adapter = {
       if (parsed.length) transcriptSessions.add(basename(file, ".jsonl"));
       entries.push(...parsed);
     }
-    for (const dir of jobDirs()) {
-      const job = parseJob(dir);
+    const dirs = jobDirs();
+    const perFile = await parseFilesParallel<JobResult>({ parser: "commandcode", files: dirs.map((dir) => join(dir, "stdout.jsonl")) }, parseJobFiles);
+    for (const [job] of perFile) {
+      if (!job) continue;
       if (job.sessionId && transcriptSessions.has(job.sessionId)) continue;
       entries.push(...job.entries);
     }

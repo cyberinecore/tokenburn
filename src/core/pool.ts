@@ -2,7 +2,7 @@ import { availableParallelism } from "node:os";
 import { statSync } from "node:fs";
 import { Worker } from "node:worker_threads";
 
-export type ParseJob = { parser: string; files: string[]; options?: Record<string, unknown> };
+export type ParseJob = { parser: string; files: string[]; options?: Record<string, unknown>; bytes?: number[] };
 
 const PARALLEL_MIN_BYTES = 64 * 1024 * 1024;
 
@@ -26,8 +26,8 @@ const sizeOf = (file: string): number => {
   }
 };
 
-const splitBySize = (files: string[], parts: number): string[][] => {
-  const sized = files.map((file, index) => ({ file, index, size: sizeOf(file) })).sort((a, b) => b.size - a.size);
+const splitBySize = (files: string[], sizes: number[], parts: number): string[][] => {
+  const sized = files.map((file, index) => ({ file, index, size: sizes[index]! })).sort((a, b) => b.size - a.size);
   const buckets = Array.from({ length: parts }, () => ({ bytes: 0, items: [] as { file: string; index: number }[] }));
   for (const item of sized) {
     const target = buckets.reduce((min, b) => (b.bytes < min.bytes ? b : min), buckets[0]!);
@@ -41,15 +41,16 @@ export async function parseFilesParallel<T>(
   job: ParseJob,
   inline: (files: string[], options?: Record<string, unknown>) => T[][] | Promise<T[][]>,
 ): Promise<T[][]> {
-  const totalBytes = job.files.reduce((acc, f) => acc + sizeOf(f), 0);
+  const sizes = job.bytes ?? job.files.map(sizeOf);
+  const totalBytes = sizes.reduce((acc, size) => acc + size, 0);
   const threads = threadCount();
   if (threads <= 1 || totalBytes < PARALLEL_MIN_BYTES || process.env.TOKENBURN_NO_WORKERS) return inline(job.files, job.options);
-  const chunks = splitBySize(job.files, threads);
+  const chunks = splitBySize(job.files, sizes, threads);
   const results = await Promise.all(
     chunks.map(
       (files) =>
         new Promise<{ files: string[]; perFile: T[][] }>((resolve, reject) => {
-          const worker = new Worker(workerPath(), { workerData: { ...job, files } });
+          const worker = new Worker(workerPath(), { workerData: { parser: job.parser, options: job.options, files } });
           worker.once("message", (perFile: T[][]) => {
             resolve({ files, perFile });
             void worker.terminate();
