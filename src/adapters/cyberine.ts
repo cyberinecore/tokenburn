@@ -1,6 +1,7 @@
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { envPaths, home, isDir } from "../core/fs.ts";
+import { parseFilesParallel } from "../core/pool.ts";
 import type { Adapter, UsageEntry } from "../core/types.ts";
 import { byTimestamp, f64, isFile, isObj, nonEmpty, type Obj, readJson, u64 } from "./common.ts";
 
@@ -170,6 +171,18 @@ const chatEntries = (session: Obj, fallbackId: string): UsageEntry[] => {
   return entry ? [entry] : [];
 };
 
+type RunResult = { runFile: string; entries: UsageEntry[] };
+
+const parseRunIndexes = (files: string[]): RunResult[][] =>
+  files.map((file) => {
+    const index = readJson(file);
+    if (!isObj(index)) return [];
+    const runFile = runFileOf(index);
+    if (!runFile) return [];
+    const run = readJson(runFile);
+    return [{ runFile, entries: isObj(run) ? runEntries(run) : [] }];
+  });
+
 const runIndexFiles = () => cyberineHomes().flatMap((root) => jsonFiles(join(root, "runs")));
 const chatFiles = () => cyberineHomes().flatMap((root) => jsonFiles(join(root, "chat-sessions")));
 
@@ -180,17 +193,15 @@ export const cyberine: Adapter = {
   envVars: ["CYBERINE_HOME"],
   reports: ["daily", "weekly", "monthly", "session"],
   hasData: () => runIndexFiles().length > 0 || chatFiles().length > 0,
+  parseFiles: parseRunIndexes,
   async load(): Promise<UsageEntry[]> {
     const entries: UsageEntry[] = [];
     const seenRuns = new Set<string>();
-    for (const file of runIndexFiles()) {
-      const index = readJson(file);
-      if (!isObj(index)) continue;
-      const runFile = runFileOf(index);
-      if (!runFile || seenRuns.has(runFile)) continue;
-      seenRuns.add(runFile);
-      const run = readJson(runFile);
-      if (isObj(run)) entries.push(...runEntries(run));
+    const perIndex = await parseFilesParallel<RunResult>({ parser: "cyberine", files: runIndexFiles(), force: true }, parseRunIndexes);
+    for (const [result] of perIndex) {
+      if (!result || seenRuns.has(result.runFile)) continue;
+      seenRuns.add(result.runFile);
+      entries.push(...result.entries);
     }
     for (const file of chatFiles()) {
       const session = readJson(file);

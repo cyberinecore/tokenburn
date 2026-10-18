@@ -3,7 +3,7 @@ import { statSync } from "node:fs";
 import { Worker } from "node:worker_threads";
 import { openParseCache } from "./cache.ts";
 
-export type ParseJob = { parser: string; files: string[]; options?: Record<string, unknown>; bytes?: number[]; cacheKey?: (file: string) => string };
+export type ParseJob = { parser: string; files: string[]; options?: Record<string, unknown>; bytes?: number[]; cacheKey?: (file: string) => string; force?: boolean };
 
 const PARALLEL_MIN_BYTES = 64 * 1024 * 1024;
 
@@ -41,7 +41,7 @@ const splitBySize = (files: string[], sizes: number[], parts: number): string[][
 type Inline<T> = (files: string[], options?: Record<string, unknown>) => T[][] | Promise<T[][]>;
 
 export async function parseFilesParallel<T>(job: ParseJob, inline: Inline<T>): Promise<T[][]> {
-  const cache = job.cacheKey ? openParseCache<T>(job.parser, workerPath()) : undefined;
+  const cache = job.cacheKey ? openParseCache<T>(job.parser) : undefined;
   if (!cache) return parseUncached(job, inline);
   const result: (T[] | undefined)[] = [];
   const stamps: (string | undefined)[] = [];
@@ -71,7 +71,7 @@ async function parseUncached<T>(job: ParseJob, inline: Inline<T>): Promise<T[][]
   const sizes = job.bytes ?? job.files.map(sizeOf);
   const totalBytes = sizes.reduce((acc, size) => acc + size, 0);
   const threads = threadCount();
-  if (threads <= 1 || totalBytes < PARALLEL_MIN_BYTES || process.env.TOKENBURN_NO_WORKERS) return inline(job.files, job.options);
+  if (threads <= 1 || (totalBytes < PARALLEL_MIN_BYTES && !job.force) || process.env.TOKENBURN_NO_WORKERS) return inline(job.files, job.options);
   const chunks = splitBySize(job.files, sizes, threads);
   const results = await Promise.all(
     chunks.map(

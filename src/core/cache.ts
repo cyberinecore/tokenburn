@@ -1,7 +1,5 @@
-import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { home } from "./fs.ts";
 
 const FORMAT = "tokenburn-parse-cache-1";
@@ -26,22 +24,12 @@ const cacheDir = (): string => {
   return join(xdg, "tokenburn");
 };
 
-let codeHash: string | undefined | null = null;
+declare const TOKENBURN_PARSER_HASHES: string | undefined;
 
-const parserCodeHash = (workerUrl: URL): string | undefined => {
-  if (codeHash !== null) return codeHash;
-  const path = fileURLToPath(workerUrl);
-  // DECISION: the cache is keyed by a hash of the bundled worker, not by the package version, because a rebuilt parser with an unchanged version must never read entries the old parser produced.
-  codeHash = path.endsWith(".js") ? hashOf(path) : undefined;
-  return codeHash;
-};
-
-const hashOf = (path: string): string | undefined => {
-  try {
-    return createHash("sha256").update(readFileSync(path)).digest("hex").slice(0, 16);
-  } catch {
-    return undefined;
-  }
+// DECISION: the cache is keyed by a build-time hash of each parser's own import closure, not by the package version or the whole bundle, because an upgrade that leaves a parser untouched should keep its cache while any edit reachable from that parser must drop it.
+const parserCodeHash = (parser: string): string | undefined => {
+  if (typeof TOKENBURN_PARSER_HASHES !== "string") return undefined;
+  return (JSON.parse(TOKENBURN_PARSER_HASHES) as Record<string, string>)[parser];
 };
 
 export const fileStamp = (file: string): string => {
@@ -150,9 +138,9 @@ const shardOf = (file: string): number => {
   return (hash >>> 0) % SHARDS;
 };
 
-export const openParseCache = <T>(parser: string, workerUrl: URL): ParseCache<T> | undefined => {
+export const openParseCache = <T>(parser: string): ParseCache<T> | undefined => {
   if (cacheDisabled()) return undefined;
-  const code = parserCodeHash(workerUrl);
+  const code = parserCodeHash(parser);
   if (!code) return undefined;
   const dir = cacheDir();
   const header = JSON.stringify({ format: FORMAT, parser, code });
