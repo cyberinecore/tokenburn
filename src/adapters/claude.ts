@@ -1,6 +1,6 @@
-import { readFileSync, statSync } from "node:fs";
+import { statSync } from "node:fs";
 import { basename, join, sep } from "node:path";
-import { envPaths, expandHome, home, isDir, walk } from "../core/fs.ts";
+import { envPaths, expandHome, home, isDir, readFileIntoScratch, walk } from "../core/fs.ts";
 import { parseFilesParallel } from "../core/pool.ts";
 import type { Adapter, LoadContext, UsageEntry } from "../core/types.ts";
 
@@ -76,6 +76,11 @@ const hasForbiddenNull = (value: unknown, iterationArrays: unknown[], allowModel
   return false;
 };
 
+const FORBIDDEN_NULL_TEXT = new RegExp(`"(?:${[...NULL_FORBIDDEN].join("|")})"\\s*:\\s*null|\\\\u00[2-7][0-9a-fA-F]`);
+
+// DECISION: the recursive forbidden-null walk runs only when the raw line could hold a forbidden key set to null, not on every line containing "null", because the walk over full message content was the costliest step and JSON can only spell such a key as "key":null or with an escaped printable character, which still takes the walk.
+const mayHoldForbiddenNull = (line: string): boolean => FORBIDDEN_NULL_TEXT.test(line);
+
 const isSemverPrefix = (value: string): boolean => /^\d+\.\d+\.\d/.test(value);
 
 const isUint = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value >= 0;
@@ -142,7 +147,7 @@ const USAGE_MARKER = Buffer.from('"usage":{');
 export const forEachMarkedLine = (path: string, marker: Buffer, visit: (line: string) => void): void => {
   let content: Buffer;
   try {
-    content = readFileSync(path);
+    content = readFileIntoScratch(path);
   } catch {
     return;
   }
@@ -180,7 +185,7 @@ const parseLine = (line: string, sessionId: string, projectPath: string, out: Cl
     if (!data || typeof data !== "object" || typeof data.timestamp !== "string") return;
     const usage = data.message?.usage;
     if (!validUsage(usage)) return;
-    if (line.includes("null")) {
+    if (mayHoldForbiddenNull(line)) {
       const iterationArrays = [usage.iterations, (data as { data?: { message?: { message?: { usage?: RawUsage } } } }).data?.message?.message?.usage?.iterations].filter(Boolean);
       if (hasForbiddenNull(data, iterationArrays)) return;
     }
@@ -215,7 +220,7 @@ const parseLine = (line: string, sessionId: string, projectPath: string, out: Cl
       usageLimitResetTime: usageLimitReset(line, data),
     };
     out.push(entry);
-    if (line.includes('"advisor_message"') && Array.isArray(usage.iterations)) {
+    if (Array.isArray(usage.iterations) && line.includes('"advisor_message"')) {
       usage.iterations.forEach((iteration, index) => {
         if (iteration.type !== "advisor_message" || !iteration.model) return;
         const advisorCache = cacheCounts(iteration as RawUsage);
@@ -248,7 +253,7 @@ const shouldReplace = (candidate: ClaudeEntry, existing: ClaudeEntry): boolean =
 
 const sessionOf = (e: ClaudeEntry) => e.dataSessionId ?? e.sessionId;
 
-export const dedupeClaude = (entries: ClaudeEntry[]): ClaudeEntry[] => {
+const claudeDeduper = () => {
   const kept: ClaudeEntry[] = [];
   const exact = new Map<string, number>();
   const replayRoutes = new Map<string, { index: number; session: string }[]>();
@@ -269,10 +274,10 @@ export const dedupeClaude = (entries: ClaudeEntry[]): ClaudeEntry[] => {
     if (e.isSidechain) pushRoute(route("replay-entry", e.messageId, session), index, session);
   };
 
-  for (const entry of entries) {
+  const push = (entry: ClaudeEntry): void => {
     if (!entry.messageId) {
       kept.push(entry);
-      continue;
+      return;
     }
     const session = sessionOf(entry);
     const key = exactKey(entry);
@@ -296,7 +301,7 @@ export const dedupeClaude = (entries: ClaudeEntry[]): ClaudeEntry[] => {
       kept.push(entry);
       exact.set(key, index);
       indexRoutes(entry, index);
-      continue;
+      return;
     }
     const existing = kept[index]!;
     const existingSession = sessionOf(existing);
@@ -311,8 +316,14 @@ export const dedupeClaude = (entries: ClaudeEntry[]): ClaudeEntry[] => {
       if (!exact.has(key)) exact.set(key, index);
       indexRoutes(entry, index);
     }
-  }
-  return kept;
+  };
+  return { push, kept };
+};
+
+export const dedupeClaude = (entries: ClaudeEntry[]): ClaudeEntry[] => {
+  const deduper = claudeDeduper();
+  for (const entry of entries) deduper.push(entry);
+  return deduper.kept;
 };
 
 const MTIME_MARGIN_MS = 86_400_000;
@@ -352,9 +363,11 @@ export const claude: Adapter = {
       }
     }
     const kept = files.filter((file) => keep.has(file));
-    const perFile = await parseFilesParallel<ClaudeEntry>({ parser: "claude", files: kept, cacheKey: () => "" }, parseClaudeFiles);
-    const entries = perFile.flat();
-    return dedupeClaude(entries);
+    const deduper = claudeDeduper();
+    await parseFilesParallel<ClaudeEntry>({ parser: "claude", files: kept, cacheKey: () => "" }, parseClaudeFiles, (_, entries) => {
+      for (const entry of entries) deduper.push(entry);
+    });
+    return deduper.kept;
   },
 };
 

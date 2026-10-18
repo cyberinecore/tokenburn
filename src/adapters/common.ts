@@ -1,6 +1,6 @@
 import { readFileSync, statSync } from "node:fs";
 import { extname } from "node:path";
-import { envPaths, home, isDir, walk } from "../core/fs.ts";
+import { envPaths, home, isDir, readFileIntoScratch, walk } from "../core/fs.ts";
 import { applyTotalTokenFallback } from "../core/tokens.ts";
 import type { UsageEntry } from "../core/types.ts";
 
@@ -46,7 +46,7 @@ export const jsonLines = (file: string): Obj[] => {
 export const forEachLineWithAny = (path: string, markers: Buffer[], visit: (line: string) => void): void => {
   let content: Buffer;
   try {
-    content = readFileSync(path);
+    content = readFileIntoScratch(path);
   } catch {
     return;
   }

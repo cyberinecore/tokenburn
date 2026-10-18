@@ -1,6 +1,6 @@
 import { readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { envPaths, home, isDir, listDir, walk } from "../core/fs.ts";
+import { envPaths, home, isDir, listDir, readFileIntoScratch, walk } from "../core/fs.ts";
 import { fileStamp } from "../core/cache.ts";
 import { parseFilesParallel } from "../core/pool.ts";
 import { openReadonly } from "../core/sqlite.ts";
@@ -36,7 +36,7 @@ const uint = (value: unknown): number => (typeof value === "number" && Number.is
 export const readJournalUsage = (file: string): UsageRecord[] => {
   let buffer: Buffer;
   try {
-    buffer = readFileSync(file);
+    buffer = readFileIntoScratch(file);
   } catch {
     return [];
   }
@@ -63,7 +63,7 @@ const sourceTimestamps = (logFile: string | undefined): Map<string, number> => {
   if (!logFile) return map;
   let text: string;
   try {
-    text = readFileSync(logFile, "latin1");
+    text = readFileIntoScratch(logFile).toString("latin1");
   } catch {
     return map;
   }

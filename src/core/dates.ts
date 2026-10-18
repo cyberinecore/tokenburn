@@ -32,10 +32,31 @@ export const isValidTimezone = (value: string): boolean => {
   }
 };
 
-export const dateKey = (timestamp: number, timezone: string | undefined): string => {
+const formatDateKey = (timestamp: number, timezone: string | undefined): string => {
   const parts = formatterFor(timezone).formatToParts(timestamp);
   const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
   return `${get("year")}-${get("month")}-${get("day")}`;
+};
+
+const MINUTE_MS = 60_000;
+
+// DECISION: date keys are memoized per UTC minute only from 1973 on, not for every timestamp, because every tzdb offset and transition since Liberia dropped its -0:44:30 offset in 1972 falls on a whole minute, so the local date cannot change inside one minute, while older timestamps keep the exact per-call formatter.
+const MINUTE_MEMO_FROM = Date.UTC(1973, 0, 1);
+
+const minuteKeys = new Map<string, Map<number, string>>();
+
+export const dateKey = (timestamp: number, timezone: string | undefined): string => {
+  if (!(timestamp >= MINUTE_MEMO_FROM)) return formatDateKey(timestamp, timezone);
+  const zone = timezone ?? "";
+  let memo = minuteKeys.get(zone);
+  if (!memo) minuteKeys.set(zone, (memo = new Map()));
+  const minute = Math.floor(timestamp / MINUTE_MS);
+  let key = memo.get(minute);
+  if (key === undefined) {
+    key = formatDateKey(timestamp, timezone);
+    memo.set(minute, key);
+  }
+  return key;
 };
 
 export const compactDate = (date: string): string => date.replaceAll("-", "");

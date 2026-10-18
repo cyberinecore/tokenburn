@@ -27,66 +27,98 @@ const sizeOf = (file: string): number => {
   }
 };
 
-const splitBySize = (files: string[], sizes: number[], parts: number): string[][] => {
-  const sized = files.map((file, index) => ({ file, index, size: sizes[index]! })).sort((a, b) => b.size - a.size);
-  const buckets = Array.from({ length: parts }, () => ({ bytes: 0, items: [] as { file: string; index: number }[] }));
-  for (const item of sized) {
-    const target = buckets.reduce((min, b) => (b.bytes < min.bytes ? b : min), buckets[0]!);
-    target.bytes += item.size;
-    target.items.push(item);
-  }
-  return buckets.filter((b) => b.items.length).map((b) => b.items.sort((x, y) => x.index - y.index).map((i) => i.file));
-};
-
 type Inline<T> = (files: string[], options?: Record<string, unknown>) => T[][] | Promise<T[][]>;
 
-export async function parseFilesParallel<T>(job: ParseJob, inline: Inline<T>): Promise<T[][]> {
+export type Emit<T> = (index: number, value: T[]) => void;
+
+const BATCH_BYTES = 16 * 1024 * 1024;
+const BATCH_FILES = 64;
+
+export async function parseFilesParallel<T>(job: ParseJob, inline: Inline<T>, emit?: Emit<T>): Promise<T[][]> {
+  const result: (T[] | undefined)[] = new Array(job.files.length);
+  let next = 0;
+  const settle = (index: number, value: T[]) => {
+    result[index] = value;
+    while (next < result.length && result[next] !== undefined) {
+      emit?.(next, result[next]!);
+      next++;
+    }
+  };
   const cache = job.cacheKey ? openParseCache<T>(job.parser) : undefined;
-  if (!cache) return parseUncached(job, inline);
-  const result: (T[] | undefined)[] = [];
   const stamps: (string | undefined)[] = [];
   const missing: number[] = [];
+  const hits: [number, T[]][] = [];
   job.files.forEach((file, i) => {
+    if (!cache) {
+      missing.push(i);
+      return;
+    }
     const { hit, stamp } = cache.lookup(file, job.cacheKey!(file));
-    result.push(hit);
-    stamps.push(stamp);
-    if (!hit) missing.push(i);
+    stamps[i] = stamp;
+    if (hit) hits.push([i, hit]);
+    else missing.push(i);
   });
+  for (const [i, hit] of hits) settle(i, hit);
   if (missing.length) {
-    const parsed = await parseUncached(
+    await parseUncached(
       { ...job, files: missing.map((i) => job.files[i]!), bytes: job.bytes && missing.map((i) => job.bytes![i]!) },
       inline,
+      (k, value) => {
+        const i = missing[k]!;
+        cache?.store(job.files[i]!, stamps[i], value);
+        settle(i, value);
+      },
     );
-    missing.forEach((i, k) => {
-      const value = parsed[k] ?? [];
-      result[i] = value;
-      cache.store(job.files[i]!, stamps[i], value);
-    });
-    cache.save();
+    cache?.save();
   }
   return result.map((value) => value ?? []);
 }
 
-async function parseUncached<T>(job: ParseJob, inline: Inline<T>): Promise<T[][]> {
+async function parseUncached<T>(job: ParseJob, inline: Inline<T>, deliver: Emit<T>): Promise<void> {
   const sizes = job.bytes ?? job.files.map(sizeOf);
   const totalBytes = sizes.reduce((acc, size) => acc + size, 0);
   const threads = threadCount();
-  if (threads <= 1 || (totalBytes < PARALLEL_MIN_BYTES && !job.force) || process.env.TOKENBURN_NO_WORKERS) return inline(job.files, job.options);
-  const chunks = splitBySize(job.files, sizes, threads);
-  const results = await Promise.all(
-    chunks.map(
-      (files) =>
-        new Promise<{ files: string[]; perFile: T[][] }>((resolve, reject) => {
-          const worker = new Worker(workerPath(), { workerData: { parser: job.parser, options: job.options, files } });
-          worker.once("message", (perFile: T[][]) => {
-            resolve({ files, perFile });
-            void worker.terminate();
+  if (threads <= 1 || (totalBytes < PARALLEL_MIN_BYTES && !job.force) || process.env.TOKENBURN_NO_WORKERS) {
+    (await inline(job.files, job.options)).forEach((value, k) => deliver(k, value ?? []));
+    return;
+  }
+  const batches: number[][] = [];
+  let current: number[] = [];
+  let bytes = 0;
+  job.files.forEach((_, k) => {
+    current.push(k);
+    bytes += sizes[k]!;
+    if (bytes >= BATCH_BYTES || current.length >= BATCH_FILES) {
+      batches.push(current);
+      current = [];
+      bytes = 0;
+    }
+  });
+  if (current.length) batches.push(current);
+  let taken = 0;
+  await Promise.all(
+    Array.from(
+      { length: Math.min(threads, batches.length) },
+      () =>
+        new Promise<void>((resolve, reject) => {
+          const worker = new Worker(workerPath(), { workerData: { parser: job.parser, options: job.options } });
+          let batch: number[] = [];
+          const send = () => {
+            if (taken >= batches.length) {
+              void worker.terminate();
+              resolve();
+              return;
+            }
+            batch = batches[taken++]!;
+            worker.postMessage(batch.map((k) => job.files[k]!));
+          };
+          worker.on("message", (perFile: T[][]) => {
+            batch.forEach((k, j) => deliver(k, perFile[j] ?? []));
+            send();
           });
           worker.once("error", reject);
+          send();
         }),
     ),
   );
-  const byFile = new Map<string, T[]>();
-  for (const { files, perFile } of results) files.forEach((file, i) => byFile.set(file, perFile[i] ?? []));
-  return job.files.map((file) => byFile.get(file) ?? []);
 }

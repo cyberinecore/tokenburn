@@ -1,4 +1,4 @@
-import { readdirSync, statSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -41,5 +41,25 @@ export const listDir = (path: string): string[] => {
     return readdirSync(path);
   } catch {
     return [];
+  }
+};
+
+let scratch = Buffer.allocUnsafe(1 << 20);
+
+// DECISION: bulk log reads go into one reused per-thread buffer, not a fresh readFileSync buffer per file, because zero-filling new pages for gigabytes of logs cost 15-45% of parallel read time; the returned view is only valid until the next call.
+export const readFileIntoScratch = (path: string): Buffer => {
+  const fd = openSync(path, "r");
+  try {
+    const size = fstatSync(fd).size;
+    if (size > scratch.length) scratch = Buffer.allocUnsafe(Math.max(size, scratch.length * 2));
+    let offset = 0;
+    while (offset < size) {
+      const read = readSync(fd, scratch, offset, size - offset, offset);
+      if (read === 0) break;
+      offset += read;
+    }
+    return scratch.subarray(0, offset);
+  } finally {
+    closeSync(fd);
   }
 };
