@@ -352,7 +352,7 @@ export const claude: Adapter = {
       }
     }
     const kept = files.filter((file) => keep.has(file));
-    const perFile = await parseFilesParallel<ClaudeEntry>({ parser: "claude", files: kept }, parseClaudeFiles);
+    const perFile = await parseFilesParallel<ClaudeEntry>({ parser: "claude", files: kept, cacheKey: () => "" }, parseClaudeFiles);
     const entries = perFile.flat();
     return dedupeClaude(entries);
   },

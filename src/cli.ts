@@ -22,6 +22,7 @@ const OPTIONS = {
   "no-offline": { type: "boolean" },
   compact: { type: "boolean" },
   "no-cost": { type: "boolean" },
+  "no-cache": { type: "boolean" },
   color: { type: "boolean" },
   "no-color": { type: "boolean" },
   config: { type: "string" },
@@ -78,6 +79,7 @@ OPTIONS:
   -O, --offline              Use embedded pricing only (no network)
       --compact              Force compact table layout
       --no-cost              Hide cost information in table and JSON output
+      --no-cache             Reparse every log file instead of reusing the parse cache
       --color / --no-color   Force or disable colors (NO_COLOR / FORCE_COLOR honored)
   -q, --jq <filter>          Pipe JSON output through jq
       --config <path>        Path to a config file (default: ./.tokenburn/config.json, ~/.config/tokenburn/config.json)
@@ -166,6 +168,8 @@ const main = async (): Promise<void> => {
   const last = str("last") ? Number(str("last")) : undefined;
   if (last !== undefined && (!Number.isInteger(last) || last < 1)) return fail("--last must be a positive integer");
   if (last !== undefined && (since || until)) return fail("--last cannot be combined with --since or --until");
+
+  if (options["no-cache"]) process.env.TOKENBURN_NO_CACHE = "1";
 
   const common = {
     json: bool("json") || str("jq") !== undefined,

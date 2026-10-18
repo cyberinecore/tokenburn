@@ -1,8 +1,9 @@
 import { availableParallelism } from "node:os";
 import { statSync } from "node:fs";
 import { Worker } from "node:worker_threads";
+import { openParseCache } from "./cache.ts";
 
-export type ParseJob = { parser: string; files: string[]; options?: Record<string, unknown>; bytes?: number[] };
+export type ParseJob = { parser: string; files: string[]; options?: Record<string, unknown>; bytes?: number[]; cacheKey?: (file: string) => string };
 
 const PARALLEL_MIN_BYTES = 64 * 1024 * 1024;
 
@@ -37,10 +38,36 @@ const splitBySize = (files: string[], sizes: number[], parts: number): string[][
   return buckets.filter((b) => b.items.length).map((b) => b.items.sort((x, y) => x.index - y.index).map((i) => i.file));
 };
 
-export async function parseFilesParallel<T>(
-  job: ParseJob,
-  inline: (files: string[], options?: Record<string, unknown>) => T[][] | Promise<T[][]>,
-): Promise<T[][]> {
+type Inline<T> = (files: string[], options?: Record<string, unknown>) => T[][] | Promise<T[][]>;
+
+export async function parseFilesParallel<T>(job: ParseJob, inline: Inline<T>): Promise<T[][]> {
+  const cache = job.cacheKey ? openParseCache<T>(job.parser, workerPath()) : undefined;
+  if (!cache) return parseUncached(job, inline);
+  const result: (T[] | undefined)[] = [];
+  const stamps: (string | undefined)[] = [];
+  const missing: number[] = [];
+  job.files.forEach((file, i) => {
+    const { hit, stamp } = cache.lookup(file, job.cacheKey!(file));
+    result.push(hit);
+    stamps.push(stamp);
+    if (!hit) missing.push(i);
+  });
+  if (missing.length) {
+    const parsed = await parseUncached(
+      { ...job, files: missing.map((i) => job.files[i]!), bytes: job.bytes && missing.map((i) => job.bytes![i]!) },
+      inline,
+    );
+    missing.forEach((i, k) => {
+      const value = parsed[k] ?? [];
+      result[i] = value;
+      cache.store(job.files[i]!, stamps[i], value);
+    });
+    cache.save();
+  }
+  return result.map((value) => value ?? []);
+}
+
+async function parseUncached<T>(job: ParseJob, inline: Inline<T>): Promise<T[][]> {
   const sizes = job.bytes ?? job.files.map(sizeOf);
   const totalBytes = sizes.reduce((acc, size) => acc + size, 0);
   const threads = threadCount();

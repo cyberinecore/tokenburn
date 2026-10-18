@@ -1,6 +1,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { envPaths, home, isDir, listDir, walk } from "../core/fs.ts";
+import { fileStamp } from "../core/cache.ts";
 import { parseFilesParallel } from "../core/pool.ts";
 import { openReadonly } from "../core/sqlite.ts";
 import type { Adapter, UsageEntry } from "../core/types.ts";
@@ -197,6 +198,11 @@ const size = (file: string | undefined): number => {
   }
 };
 
+const sessionStamp = (dir: string, job: SessionJob): string =>
+  [JSON.stringify(job), job.logPath ? fileStamp(job.logPath) : "", ...listDir(dir)
+    .sort()
+    .map((name) => `${name}=${fileStamp(join(dir, name))}`)].join("|");
+
 export const muse: Adapter = {
   id: "muse",
   label: "Muse Code",
@@ -221,7 +227,7 @@ export const muse: Adapter = {
         jobs[dir] = { indexRow, logPath: logs.get(sessionDir) ?? indexRow?.logPath };
       }
       const perSession = await parseFilesParallel<KeyedEntry>(
-        { parser: "muse", files: dirs, options: { jobs }, bytes: dirs.map((dir) => size(jobs[dir]!.logPath)) },
+        { parser: "muse", files: dirs, options: { jobs }, bytes: dirs.map((dir) => size(jobs[dir]!.logPath)), cacheKey: (dir) => sessionStamp(dir, jobs[dir]!) },
         parseSessionFiles,
       );
       for (const { key, entry } of perSession.flat()) {

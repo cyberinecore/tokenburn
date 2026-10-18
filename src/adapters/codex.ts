@@ -512,7 +512,7 @@ export const codex: Adapter = {
     const dirByFile = new Map(all.map((f) => [f.file, f.dir]));
     const files = all.map((f) => f.file);
     const perFile = await parseFilesParallel<CodexFileResult>(
-      { parser: "codex", files, options: { dirByFile: Object.fromEntries(dirByFile) } },
+      { parser: "codex", files, options: { dirByFile: Object.fromEntries(dirByFile) }, cacheKey: (file) => dirByFile.get(file)! },
       (chunk) => chunk.map((file) => [parseCodexFile(file, dirByFile.get(file)!)]),
     );
     const results = perFile.map((r) => r[0]!).filter(Boolean);

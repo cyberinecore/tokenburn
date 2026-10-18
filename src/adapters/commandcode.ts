@@ -1,6 +1,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { envPaths, home, isDir, listDir, walk } from "../core/fs.ts";
+import { fileStamp } from "../core/cache.ts";
 import { parseFilesParallel } from "../core/pool.ts";
 import { lenientUint } from "../core/tokens.ts";
 import { forEachLineWithAny } from "./common.ts";
@@ -178,7 +179,7 @@ export const commandcode: Adapter = {
       entries.push(...parsed);
     }
     const dirs = jobDirs();
-    const perFile = await parseFilesParallel<JobResult>({ parser: "commandcode", files: dirs.map((dir) => join(dir, "stdout.jsonl")) }, parseJobFiles);
+    const perFile = await parseFilesParallel<JobResult>({ parser: "commandcode", files: dirs.map((dir) => join(dir, "stdout.jsonl")), cacheKey: (file) => fileStamp(join(dirname(file), "meta.json")) }, parseJobFiles);
     for (const [job] of perFile) {
       if (!job) continue;
       if (job.sessionId && transcriptSessions.has(job.sessionId)) continue;

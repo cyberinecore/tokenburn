@@ -164,6 +164,8 @@ For every agent ccusage 20.0.26 also reads (Claude Code, Codex, OpenCode, Gemini
 
 Files are parsed in worker threads (set `TOKENBURN_THREADS`, or `TOKENBURN_NO_WORKERS=1` to disable). `--since` and `--last` skip log files that were last written before the window.
 
+Claude Code and Codex parse results are cached per log file in `~/.cache/tokenburn` (or `$XDG_CACHE_HOME/tokenburn`, or `TOKENBURN_CACHE_DIR`). A file is reparsed when its size, mtime, ctime or inode changes, and the whole cache is dropped when the parser code changes, so later runs only read files that changed since the last run. Pass `--no-cache` or set `TOKENBURN_NO_CACHE=1` to bypass it; deleting the directory is always safe.
+
 ## Development
 
 ```sh
