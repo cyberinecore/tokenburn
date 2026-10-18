@@ -50,6 +50,10 @@ export const forEachLineWithAny = (path: string, markers: Buffer[], visit: (line
   } catch {
     return;
   }
+  forEachLineWithAnyIn(content, markers, visit);
+};
+
+export const forEachLineWithAnyIn = (content: Buffer, markers: Buffer[], visit: (line: string) => void): void => {
   const next = markers.map((marker) => content.indexOf(marker));
   let from = 0;
   for (;;) {

@@ -1,10 +1,11 @@
 import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
-import { envPaths, home, isDir, walk } from "../core/fs.ts";
+import { envPaths, home, isDir, readFileIntoScratch, walk } from "../core/fs.ts";
 import { parseFilesParallel } from "../core/pool.ts";
 import { dateKey, weekStart, withinRange } from "../core/dates.ts";
 import type { Adapter, LoadContext, PricedEntry, ReportKind, UsageEntry } from "../core/types.ts";
 import { resolveModelAlias } from "../pricing/aliases.ts";
+import { forEachLineWithAnyIn } from "./common.ts";
 import autoReviewFallbacks from "./data/codex-auto-review-fallbacks.json" with { type: "json" };
 
 type RawUsage = {
@@ -150,6 +151,9 @@ const serviceTier = (value: string): "standard" | "fast" | undefined =>
 
 const typeValueRe = /"type"\s*:\s*"([a-z_]+)"/g;
 
+// DECISION: Codex logs are scanned for lineKind's own trigger strings on the raw bytes, not decoded whole and split, because only lines holding one of these strings can get a kind and decoding 1.2 GB of transcript text was the costliest part of the parse.
+const CODEX_MARKERS = ['"turn_context"', '"token_count"', '"thread_settings_applied"', '"usage":', '"input_tokens":', '"prompt_tokens":'].map((marker) => Buffer.from(marker));
+
 const lineKind = (line: string): "session" | "headless" | undefined => {
   const hasEventMsg = line.includes('"event_msg"');
   const hasTokenCount = hasEventMsg && line.includes('"token_count"');
@@ -173,9 +177,7 @@ const lineKind = (line: string): "session" | "headless" | undefined => {
   return undefined;
 };
 
-const firstLineMeta = (content: string): CodexFileResult["meta"] => {
-  const end = content.indexOf("\n");
-  const first = end < 0 ? content : content.slice(0, end);
+const firstLineMeta = (first: string): CodexFileResult["meta"] => {
   try {
     const value = JSON.parse(first) as Record<string, any>;
     const payload = value.type === "session_meta" ? value.payload : undefined;
@@ -189,9 +191,9 @@ const firstLineMeta = (content: string): CodexFileResult["meta"] => {
 
 export const parseCodexFile = (file: string, sessionsDir: string): CodexFileResult => {
   const sessionId = relative(sessionsDir, file).replace(/\.jsonl$/, "").split(sep).join("/") || "unknown";
-  let content = "";
+  let content: Buffer;
   try {
-    content = readFileSync(file, "utf8");
+    content = readFileIntoScratch(file);
   } catch {
     return { file, sessionId, events: [], meta: {} };
   }
@@ -206,21 +208,16 @@ export const parseCodexFile = (file: string, sessionsDir: string): CodexFileResu
   let previousTotals: RawUsage | undefined;
   let tier: "standard" | "fast" | undefined;
   const burst: number[] = [];
-  let start = 0;
-  while (start < content.length) {
-    let end = content.indexOf("\n", start);
-    if (end < 0) end = content.length;
-    const line = content.slice(start, end);
-    start = end + 1;
+  forEachLineWithAnyIn(content, CODEX_MARKERS, (line) => {
     const kind = lineKind(line);
-    if (!kind) continue;
+    if (!kind) return;
     let value: Record<string, any>;
     try {
       value = JSON.parse(line);
     } catch {
-      continue;
+      return;
     }
-    if (!value || typeof value !== "object") continue;
+    if (!value || typeof value !== "object") return;
     if (kind === "session") {
       const type = value.type;
       if (type === "turn_context") {
@@ -229,18 +226,18 @@ export const parseCodexFile = (file: string, sessionsDir: string): CodexFileResu
           modelState.current = model;
           modelState.isFallback = false;
         }
-        continue;
+        return;
       }
-      if (type !== "event_msg") continue;
+      if (type !== "event_msg") return;
       const timestamp = sessionTimestamp(value.timestamp);
       const payload = value.payload;
-      if (!timestamp || !payload || typeof payload !== "object") continue;
+      if (!timestamp || !payload || typeof payload !== "object") return;
       if (payload.type === "thread_settings_applied") {
         const recorded = payload.thread_settings?.service_tier;
         if (typeof recorded === "string") tier = serviceTier(recorded);
-        continue;
+        return;
       }
-      if (payload.type !== "token_count") continue;
+      if (payload.type !== "token_count") return;
       const info = payload.info && typeof payload.info === "object" ? payload.info : undefined;
       const totalUsage = parseRawUsage(info?.total_token_usage);
       const lastUsage = parseRawUsage(info?.last_token_usage);
@@ -251,18 +248,18 @@ export const parseCodexFile = (file: string, sessionsDir: string): CodexFileResu
       const advanced = !totalUsage || !sameUsage(previousTotals, totalUsage);
       const raw = (advanced ? lastUsage : undefined) ?? (totalUsage ? subtractUsage(totalUsage, previousTotals) : undefined);
       if (totalUsage) previousTotals = totalUsage;
-      if (!raw) continue;
+      if (!raw) return;
       const usage = normalizeUsage(raw);
-      if (usage.input === 0 && usage.cached === 0 && usage.cacheCreation === 0 && usage.output === 0 && usage.reasoning === 0) continue;
+      if (usage.input === 0 && usage.cached === 0 && usage.cacheCreation === 0 && usage.output === 0 && usage.reasoning === 0) return;
       const parsedModel = modelFromFields(payload) ?? modelFromFields(info);
       const { model, isFallback } = resolveModel(parsedModel, timestamp, modelState);
       events.push({ ...usage, timestamp, model, isFallback, serviceTier: tier });
-      continue;
+      return;
     }
     const usageRaw = parseRawUsage(value.usage) ?? parseRawUsage(value.data?.usage) ?? parseRawUsage(value.result?.usage) ?? parseRawUsage(value.response?.usage);
-    if (!usageRaw) continue;
+    if (!usageRaw) return;
     const usage = normalizeUsage(usageRaw);
-    if (usage.input === 0 && usage.cached === 0 && usage.cacheCreation === 0 && usage.output === 0 && usage.reasoning === 0 && usage.total === 0) continue;
+    if (usage.input === 0 && usage.cached === 0 && usage.cacheCreation === 0 && usage.output === 0 && usage.reasoning === 0 && usage.total === 0) return;
     const parsedModel = modelFromFields(value) ?? modelFromFields(value.data) ?? modelFromFields(value.result) ?? modelFromFields(value.response);
     const pick = (f: (v: unknown) => string | undefined) =>
       [value, value.data, value.result, value.response].map((v) => (v && typeof v === "object" ? f(v.timestamp) ?? f(v.created_at) ?? f(v.createdAt) : undefined)).find(Boolean);
@@ -270,9 +267,10 @@ export const parseCodexFile = (file: string, sessionsDir: string): CodexFileResu
     const modelTs = pick(rawOrNormalized) ?? fallbackTimestamp;
     const { model, isFallback } = resolveModel(parsedModel, modelTs, modelState);
     events.push({ ...usage, timestamp: eventTs, model, isFallback });
-  }
+  });
   const burstStart = burst.length === 2 && burst[1]! - burst[0]! >= 0 && burst[1]! - burst[0]! <= 1000 ? burst[0] : undefined;
-  return { file, sessionId, events, meta: firstLineMeta(content), burstStart };
+  const firstEnd = content.indexOf(10);
+  return { file, sessionId, events, meta: firstLineMeta(content.toString("utf8", 0, firstEnd < 0 ? content.length : firstEnd)), burstStart };
 };
 
 const REWRITTEN_BURST_PAUSE_MS = 1000;
